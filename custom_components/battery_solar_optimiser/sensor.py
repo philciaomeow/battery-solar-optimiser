@@ -10,7 +10,7 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
+from homeassistant.helpers.event import async_call_later, async_track_time_change, async_track_time_interval
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util.dt import utcnow
 
@@ -40,7 +40,8 @@ async def async_setup_entry(
 ) -> None:
     """Set up the sensor platform."""
     coordinator = BatterySolarOptimiserCoordinator(hass, config_entry)
-    await coordinator.async_refresh()
+    # Delay initial refresh until source entities (e.g. Octopus Energy event) are available.
+    async_call_later(hass, 30, coordinator.async_refresh)
     async_add_entities(
         [
             BatterySolarOptimiserPlanSensor(coordinator),
@@ -74,7 +75,7 @@ class BatterySolarOptimiserCoordinator:
         agile_entity = cfg.get("agile_entity", "")
         agile_rates: list[tuple[datetime, float]] = []
         rates_state = state_api.get(agile_entity)
-        _LOGGER.info(
+        _LOGGER.debug(
             "Agile entity %s state present: %s attrs_keys: %s",
             agile_entity,
             rates_state is not None,
