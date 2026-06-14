@@ -25,7 +25,7 @@ A lightweight Home Assistant custom component for battery + solar + Agile import
 ### HACS (recommended)
 
 1. Open HACS in Home Assistant.
-2. Add this repository as a custom repository (`https://github.com/phil-ciaomeow/battery-solar-optimiser`).
+2. Add this repository as a custom repository (`https://github.com/philciaomeow/battery-solar-optimiser`).
 3. Install **Battery Solar Optimiser**.
 4. Restart Home Assistant.
 5. Go to **Settings > Devices & Services > Add Integration > Battery Solar Optimiser**.
@@ -38,15 +38,38 @@ A lightweight Home Assistant custom component for battery + solar + Agile import
 
 ## Configuration
 
-- **Agile price entity** — Octopus Agile sensor
-- **Solar forecast entity** — e.g. Solcast
-- **Battery SOC entity** — kWh remaining
-- **Inverter mode entity** — reserved for future control expansion
+The integration is configured entirely through the Home Assistant UI.
+
+After setup, open **Settings > Devices & Services > Battery Solar Optimiser > Configure** to change the selected entities or tuning values. Saving the options reloads the integration automatically.
+
+- **Agile price entity** — Octopus Agile event/sensor with rate attributes
+- **Solar forecast entity** — Forecast.Solar/Solcast forecast sensor, or a solar production sensor fallback
+- **Battery SOC entity** — optional kWh or percentage state-of-charge sensor
+- **Inverter mode entity** — optional entity reserved for future direct-control expansion
 - **Battery capacity** — kWh
 - **Minimum SOC** — kWh; when SOC drops below this the plan refreshes every 5 minutes
+- **PV capacity** — installed PV size used for fallback solar estimates
 - **Max charge / discharge power** — kW
-- **Round-trip efficiency** — 0.0–1.0
+- **Round-trip efficiency** — 0.5–1.0
 - **Hourly load** — average W
+
+## Dashboard
+
+A ready-made Lovelace dashboard template is included at:
+
+```text
+dashboards/battery-solar-optimiser-dashboard.yaml
+```
+
+It shows:
+
+- the current recommended action
+- next charge/discharge slot
+- estimated 24h cost
+- a 24-slot table with action, price, solar and projected battery level
+- a short history graph
+
+To use it, copy the YAML into a new Home Assistant dashboard/view in raw configuration mode. The default entity IDs match a standard installation (`sensor.battery_solar_optimiser_plan`, `select.battery_solar_optimiser_action`, etc.).
 
 ## Scheduling logic
 

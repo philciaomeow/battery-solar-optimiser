@@ -1,0 +1,45 @@
+title: Battery Solar Optimiser
+views:
+  - title: Battery Solar Optimiser
+    path: battery-solar-optimiser
+    icon: mdi:solar-power-variant
+    cards:
+      - type: entities
+        title: Current recommendation
+        entities:
+          - entity: select.battery_solar_optimiser_action
+            name: Recommended action
+          - entity: sensor.battery_solar_optimiser_plan
+            name: Current slot
+          - entity: sensor.battery_solar_optimiser_next_action
+            name: Next active slot
+          - entity: sensor.battery_solar_optimiser_estimated_cost
+            name: Estimated 24h cost
+      - type: markdown
+        title: 24 hour plan
+        content: >-
+          {% set slots = state_attr('sensor.battery_solar_optimiser_plan', 'slots') or [] %}
+          {% set soc = state_attr('sensor.battery_solar_optimiser_plan', 'projected_soc_kwh') or [] %}
+          {% if slots | length == 0 %}
+          No plan is available yet. Check that Octopus Agile and solar source entities are available.
+          {% else %}
+          | Time | Action | Power | Price | Solar | Projected battery |
+          |---|---:|---:|---:|---:|---:|
+          {% for s in slots[:24] %}
+          | {{ as_timestamp(s.start) | timestamp_custom('%H:%M', true) }} | {{ s.action }} | {{ s.action_kw }} kW | {{ (s.price * 100) | round(1) }}p | {{ s.solar_kwh | round(2) }} kWh | {{ soc[loop.index0] if loop.index0 < soc|length else '?' }} kWh |
+          {% endfor %}
+          {% endif %}
+      - type: markdown
+        title: Totals
+        content: >-
+          {% set p = 'sensor.battery_solar_optimiser_plan' %}
+          **Initial battery:** {{ state_attr(p, 'initial_soc_kwh') }} kWh  
+          **Total import:** {{ state_attr(p, 'total_import_kwh') }} kWh  
+          **Total export:** {{ state_attr(p, 'total_export_kwh') }} kWh
+      - type: history-graph
+        title: Optimiser history
+        hours_to_show: 24
+        entities:
+          - entity: sensor.battery_solar_optimiser_plan
+          - entity: sensor.battery_solar_optimiser_estimated_cost
+          - entity: sensor.battery_solar_optimiser_next_action

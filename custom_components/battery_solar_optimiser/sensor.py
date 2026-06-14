@@ -86,10 +86,11 @@ async def async_setup_entry(
     async_add_entities(entities)
 
     # Refresh when the configured source entities become available or change.
+    cfg = {**config_entry.data, **config_entry.options}
     source_entities = [
-        config_entry.data.get("agile_entity"),
-        config_entry.data.get("solar_forecast_entity"),
-        config_entry.data.get("battery_soc_entity"),
+        cfg.get("agile_entity"),
+        cfg.get("solar_forecast_entity"),
+        cfg.get("battery_soc_entity"),
     ]
     source_entities = [e for e in source_entities if e]
 
@@ -117,7 +118,7 @@ class BatterySolarOptimiserCoordinator:
 
     async def async_refresh(self, now: datetime | None = None) -> None:
         """Refresh optimisation plan and push updates to entities."""
-        cfg = self.config_entry.data
+        cfg = {**self.config_entry.data, **self.config_entry.options}
         state_api = self.hass.states
 
         soc_entity = cfg.get("battery_soc_entity", "")
