@@ -1,0 +1,7 @@
+{
+  "name": "Battery Solar Optimiser",
+  "content_in_root": false,
+  "filename": "battery_solar_optimiser",
+  "homeassistant": "2024.1.0",
+  "render_readme": true
+}

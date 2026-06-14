@@ -1,0 +1,5 @@
+.github/workflows/validate.yml
+.custom_components
+custom_components/battery_solar_optimiser/__pycache__
+*.pyc
+.DS_Store
