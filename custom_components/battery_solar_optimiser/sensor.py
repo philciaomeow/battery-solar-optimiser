@@ -134,6 +134,86 @@ def _solar_heuristic(now: datetime, capacity_kwh: float) -> list[tuple[datetime,
     return slots
 
 
+def _state_float(state) -> float | None:
+    """Return a state's float value, or None when unavailable."""
+    if state is None or state.state in (None, "unavailable", "unknown"):
+        return None
+    try:
+        return float(state.state)
+    except (TypeError, ValueError):
+        return None
+
+
+def _power_state_to_slot_kwh(state) -> float | None:
+    """Convert a W/kW power state to kWh for one 30-minute slot."""
+    value = _state_float(state)
+    if value is None:
+        return None
+    uom = str(state.attributes.get("unit_of_measurement", "")).lower()
+    if uom == "w":
+        return max(0.0, value / 1000.0 * 0.5)
+    if uom == "kw":
+        return max(0.0, value * 0.5)
+    return None
+
+
+def _energy_state_to_half_hour_kwh(state) -> float | None:
+    """Convert an hourly kWh energy state to a half-hour slot estimate."""
+    value = _state_float(state)
+    if value is None:
+        return None
+    uom = str(state.attributes.get("unit_of_measurement", "")).lower()
+    if uom == "kwh":
+        return max(0.0, value / 2.0)
+    if uom == "wh":
+        return max(0.0, value / 1000.0 / 2.0)
+    return None
+
+
+def _solar_from_power_sensors(state_api, solar_entity: str, now: datetime) -> list[tuple[datetime, float]]:
+    """Build a short solar forecast from Forecast.Solar power/energy sensors.
+
+    Forecast.Solar often exposes sensors such as ``power_production_now`` and
+    ``power_production_next_hour`` rather than a detailed forecast attribute.
+    Convert those W/kW readings into kWh per 30-minute slot before falling back
+    to the generic bell curve.
+    """
+    selected = state_api.get(solar_entity)
+    current_slot = _power_state_to_slot_kwh(selected) or _energy_state_to_half_hour_kwh(selected)
+
+    # Forecast.Solar's common entity IDs are stable enough to infer siblings
+    # from a selected ``sensor.power_production_now`` entity.
+    next_hour = None
+    current_hour_energy = None
+    next_hour_energy = None
+    if solar_entity.endswith("power_production_now"):
+        prefix = solar_entity[: -len("power_production_now")]
+        next_hour = _power_state_to_slot_kwh(state_api.get(f"{prefix}power_production_next_hour"))
+        current_hour_energy = _energy_state_to_half_hour_kwh(state_api.get(f"{prefix}energy_current_hour"))
+        next_hour_energy = _energy_state_to_half_hour_kwh(state_api.get(f"{prefix}energy_next_hour"))
+
+    if current_hour_energy is not None:
+        current_slot = current_hour_energy
+    if next_hour_energy is not None:
+        next_hour = next_hour_energy
+
+    if current_slot is None and next_hour is None:
+        return []
+
+    base = now.replace(minute=0, second=0, microsecond=0)
+    slots = []
+    for i in range(48):
+        slot_start = base + timedelta(minutes=30 * i)
+        if i < 2 and current_slot is not None:
+            val = current_slot
+        elif i < 4 and next_hour is not None:
+            val = next_hour
+        else:
+            val = 0.0
+        slots.append((slot_start, val))
+    return slots
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -284,11 +364,20 @@ class BatterySolarOptimiserCoordinator:
                 except (KeyError, ValueError, TypeError):
                     continue
 
-        # If no detailed forecast, use a simple heuristic based on installed capacity.
+        # If no detailed forecast exists, try Forecast.Solar style power/energy
+        # sensors and merge known near-term readings over the generic bell curve.
         if not solar_forecast:
-            solar_forecast = _solar_heuristic(
-                refresh_started, float(cfg.get("pv_capacity_kwh", 5.0))
-            )
+            heuristic = _solar_heuristic(refresh_started, float(cfg.get("pv_capacity_kwh", 5.0)))
+            power_sensor_forecast = _solar_from_power_sensors(state_api, solar_entity, refresh_started)
+            if power_sensor_forecast:
+                solar_forecast = [
+                    (slot_start, power_val if power_val > 0 else heuristic[idx][1])
+                    for idx, ((slot_start, power_val), _heuristic_slot) in enumerate(
+                        zip(power_sensor_forecast, heuristic, strict=False)
+                    )
+                ]
+            else:
+                solar_forecast = heuristic
 
         low_soc = current_soc_kwh < float(cfg.get("min_soc_kwh", 0.5))
         self.plan = build_plan(
