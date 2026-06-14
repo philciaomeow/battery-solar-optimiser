@@ -59,6 +59,29 @@ def _local_time(value: datetime, time_zone: str = "Europe/London") -> str:
     return value.astimezone(tz).strftime("%H:%M")
 
 
+def _extract_rates_from_state(state) -> list[tuple[datetime, float]]:
+    """Extract Octopus Energy rates as (start, GBP/kWh) pairs from a HA state."""
+    rates: list[tuple[datetime, float]] = []
+    if state and isinstance(state.attributes.get("rates"), list):
+        for rate in state.attributes["rates"]:
+            try:
+                start = _parse_dt(rate.get("start"))
+                if start is None:
+                    continue
+                price = float(rate["value_inc_vat"])
+                rates.append((start, price))
+            except (KeyError, ValueError, TypeError):
+                continue
+    return rates
+
+
+def _previous_day_entity_id(entity_id: str) -> str | None:
+    """Infer Octopus previous-day rates entity from current-day rates entity."""
+    if "current_day_rates" in entity_id:
+        return entity_id.replace("current_day_rates", "previous_day_rates")
+    return None
+
+
 def _current_slot(plan: Plan, now: datetime):
     """Return the slot containing now, or None."""
     for slot in plan.slots:
@@ -134,6 +157,7 @@ async def async_setup_entry(
     cfg = {**config_entry.data, **config_entry.options}
     source_entities = [
         cfg.get("agile_entity"),
+        cfg.get("previous_day_rates_entity"),
         cfg.get("solar_forecast_entity"),
         cfg.get("battery_soc_entity"),
     ]
@@ -225,18 +249,12 @@ class BatterySolarOptimiserCoordinator:
             current_soc_kwh = cfg.get("min_soc_kwh", 0.0)
 
         agile_entity = cfg.get("agile_entity", "")
-        agile_rates: list[tuple[datetime, float]] = []
         rates_state = state_api.get(agile_entity)
-        if rates_state and isinstance(rates_state.attributes.get("rates"), list):
-            for r in rates_state.attributes["rates"]:
-                try:
-                    start = _parse_dt(r.get("start"))
-                    if start is None:
-                        continue
-                    price = float(r["value_inc_vat"])
-                    agile_rates.append((start, price))
-                except (KeyError, ValueError, TypeError):
-                    continue
+        agile_rates = _extract_rates_from_state(rates_state)
+
+        previous_day_entity = cfg.get("previous_day_rates_entity") or _previous_day_entity_id(agile_entity) or ""
+        previous_day_rates = _extract_rates_from_state(state_api.get(previous_day_entity))
+        historical_rates = [*previous_day_rates, *agile_rates]
 
         solar_entity = cfg.get("solar_forecast_entity", "")
         solar_forecast: list[tuple[datetime, float]] = []
@@ -271,7 +289,17 @@ class BatterySolarOptimiserCoordinator:
             max_discharge_kw=float(cfg.get("max_discharge_kw", 3.7)),
             efficiency=float(cfg.get("round_trip_efficiency", 0.95)),
             missing_rate_pence=float(cfg.get("missing_rate_pence", 30.0)),
+            previous_day_rates=previous_day_rates,
+            historical_rates=historical_rates,
+            lookback_hours=int(float(cfg.get("lookback_hours", 12))),
         )
+
+        source_counts = {"actual": 0, "previous_day": 0, "fallback": 0}
+        if self.plan:
+            for slot in self.plan.slots:
+                source_counts[slot.price_source] = source_counts.get(slot.price_source, 0) + 1
+        self.data["price_source_counts"] = source_counts
+        self.data["previous_day_rates_entity"] = previous_day_entity or None
 
         refresh_finished = dt_util.utcnow()
         self.data["last_updated"] = refresh_finished
@@ -359,6 +387,7 @@ class BatterySolarOptimiserPlanSensor(BatterySolarOptimiserBaseSensor):
                 "start": s.start.isoformat(),
                 "start_local": _local_time(s.start, tz),
                 "price": round(s.price, 3),
+                "price_source": s.price_source,
                 "solar_kwh": round(s.solar_kwh, 3),
                 "action": _map_action(s.action),
                 "battery_percent": round((plan.projected_soc[idx + 1] / capacity) * 100, 1),
@@ -377,6 +406,9 @@ class BatterySolarOptimiserPlanSensor(BatterySolarOptimiserBaseSensor):
             "initial_soc_kwh": plan.initial_soc_kwh,
             "total_import_kwh": round(plan.total_import_kwh, 3),
             "total_export_kwh": round(plan.total_export_kwh, 3),
+            "price_source_counts": self.coordinator.data.get("price_source_counts", {}),
+            "previous_day_rates_entity": self.coordinator.data.get("previous_day_rates_entity"),
+            "lookback_hours": int(float(self.coordinator.cfg.get("lookback_hours", 12))),
         }
 
 

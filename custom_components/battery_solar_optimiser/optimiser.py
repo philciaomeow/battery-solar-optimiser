@@ -14,6 +14,7 @@ class Slot:
     end: datetime
     price: float  # p/kWh
     solar_kwh: float  # expected solar generation in this slot
+    price_source: str = "actual"  # actual, previous_day, fallback
     action: str = "hold"  # 'charge', 'discharge', 'hold'
     action_kw: float = 0.0
     import_kwh: float = 0.0
@@ -70,12 +71,17 @@ def build_plan(
     efficiency: float,
     horizon_slots: int = 48,
     missing_rate_pence: float = 30.0,
+    previous_day_rates: list[tuple[datetime, float]] | None = None,
+    historical_rates: list[tuple[datetime, float]] | None = None,
+    lookback_hours: int = 12,
 ) -> Plan:
     """Build a charge/discharge plan over the next horizon_slots half-hours.
 
     Prices from Octopus are provided as GBP/kWh and converted to p/kWh.
-    Missing future rates are treated pessimistically (default 30p/kWh), not as
-    free energy. This avoids draining the battery before unpublished Agile slots.
+    Missing future rates are first estimated from the previous day's same
+    half-hour slot, then from a fixed pessimistic fallback. Historical rates from
+    the recent lookback window are included when deciding what counts as cheap or
+    expensive so upcoming prices are not judged in isolation.
     """
     slot_duration_h = 0.5
     load_kw = load_w / 1000.0
@@ -88,22 +94,51 @@ def build_plan(
     for t, p in agile_rates:
         price_map[_to_utc(t)] = p * 100.0  # p/kWh
 
+    previous_day_time_map: dict[tuple[int, int], float] = {}
+    for t, p in previous_day_rates or []:
+        ts = _to_utc(t)
+        previous_day_time_map[(ts.hour, ts.minute)] = p * 100.0
+
+    historical_price_map: dict[datetime, float] = {}
+    for t, p in historical_rates or agile_rates:
+        historical_price_map[_to_utc(t)] = p * 100.0
+
     solar_map: dict[datetime, float] = {}
     for t, s in solar_forecast:
         solar_map[_to_utc(t)] = s
 
     slots: list[Slot] = []
     for t in start_times:
+        utc_t = _to_utc(t)
+        if utc_t in price_map:
+            price = price_map[utc_t]
+            price_source = "actual"
+        else:
+            previous_day_price = previous_day_time_map.get((utc_t.hour, utc_t.minute))
+            if previous_day_price is not None:
+                price = previous_day_price
+                price_source = "previous_day"
+            else:
+                price = missing_rate_pence
+                price_source = "fallback"
         slots.append(
             Slot(
                 start=t,
                 end=t + timedelta(minutes=30),
-                price=price_map.get(_to_utc(t), missing_rate_pence),
-                solar_kwh=solar_map.get(_to_utc(t), 0.0),
+                price=price,
+                solar_kwh=solar_map.get(utc_t, 0.0),
+                price_source=price_source,
             )
         )
 
-    prices = [s.price for s in slots if s.price > 0]
+    lookback_start = first_slot - timedelta(hours=max(0, lookback_hours))
+    lookback_prices = [
+        price
+        for ts, price in historical_price_map.items()
+        if lookback_start <= ts < first_slot and price > 0
+    ]
+    planning_prices = [s.price for s in slots if s.price > 0]
+    prices = lookback_prices + planning_prices
     if len(prices) >= 2:
         cheap_threshold = _percentile(prices, 0.20)
         percentile_expensive_threshold = _percentile(prices, 0.80)
@@ -163,7 +198,11 @@ def build_plan(
         elif arbitrage_enabled and slot.price >= expensive_threshold and soc > min_soc_kwh + 0.05:
             # Discharge during expensive slots. Do not require a cheaper future slot;
             # the point is to avoid buying now when the battery already has energy.
-            if slot.price > avg_future_price or slot.price >= missing_rate_pence:
+            if (
+                slot.price > avg_future_price
+                or slot.price >= missing_rate_pence
+                or slot.price >= cheap_threshold + 3.0
+            ):
                 action = "discharge"
                 is_forced = True
 

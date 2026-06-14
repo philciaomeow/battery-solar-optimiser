@@ -189,3 +189,57 @@ def test_full_battery_pre_peak_slots_stay_in_charge_mode():
     )
     assert any(slot.action == "charge" for slot in plan.slots[:7])
     assert all(slot.action in ("charge", "discharge") for slot in plan.slots[:9])
+
+
+def test_missing_future_rates_use_previous_day_same_slot_before_fixed_fallback():
+    now = datetime(2026, 6, 14, 20, 0, tzinfo=timezone.utc)
+    current_rates = [(now + timedelta(minutes=30 * i), 0.10) for i in range(2)]
+    previous_day = [
+        (datetime(2026, 6, 13, 21, 0, tzinfo=timezone.utc), 0.07),
+        (datetime(2026, 6, 13, 21, 30, tzinfo=timezone.utc), 0.08),
+    ]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+    plan = build_plan(
+        now=now,
+        agile_rates=current_rates,
+        previous_day_rates=previous_day,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=0.5,
+        current_soc_kwh=1.0,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        missing_rate_pence=30.0,
+    )
+    assert round(plan.slots[2].price, 3) == 7.0
+    assert plan.slots[2].price_source == "previous_day"
+    assert plan.slots[4].price == 30.0
+    assert plan.slots[4].price_source == "fallback"
+
+
+def test_historical_lookback_influences_price_thresholds():
+    now = datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc)
+    # Upcoming slots alone are tightly clustered around 20p, but the previous
+    # slots were extremely cheap. With lookback enabled, 20p is no longer
+    # treated as cheap relative to recent prices.
+    upcoming = [(now + timedelta(minutes=30 * i), 0.20) for i in range(48)]
+    history = [(now - timedelta(minutes=30 * i), 0.02) for i in range(1, 13)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+    plan = build_plan(
+        now=now,
+        agile_rates=upcoming,
+        historical_rates=[*history, *upcoming],
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=0.5,
+        current_soc_kwh=5.0,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        missing_rate_pence=30.0,
+        lookback_hours=6,
+    )
+    assert any(slot.action == "discharge" for slot in plan.slots[:4])
