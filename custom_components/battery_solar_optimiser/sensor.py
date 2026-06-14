@@ -74,6 +74,12 @@ class BatterySolarOptimiserCoordinator:
         agile_entity = cfg.get("agile_entity", "")
         agile_rates: list[tuple[datetime, float]] = []
         rates_state = state_api.get(agile_entity)
+        _LOGGER.debug(
+            "Agile entity %s state: %s attrs_keys: %s",
+            agile_entity,
+            rates_state is not None,
+            list(rates_state.attributes.keys()) if rates_state else None,
+        )
         if rates_state and isinstance(rates_state.attributes.get("rates"), list):
             for r in rates_state.attributes["rates"]:
                 try:
