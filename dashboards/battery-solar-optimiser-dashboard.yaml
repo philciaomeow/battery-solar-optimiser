@@ -1,7 +1,4 @@
 title: Battery Solar Optimiser
-resources:
-  - url: /local/bso-plan-card.js
-    type: module
 views:
   - title: Battery Solar Optimiser
     path: battery-solar-optimiser
