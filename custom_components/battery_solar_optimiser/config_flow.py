@@ -31,26 +31,38 @@ BATTERY_SOC_PATTERNS = ("battery_soc", "battery_state_of_charge", "bms_soc")
 INVERTER_MODE_PATTERNS = ("solar_inverter", "inverter_mode", "solax")
 
 
-def _score_entity(entity_id: str, attrs: dict, patterns: tuple[str, ...]) -> int:
-    """Simple scoring for likely entities."""
+def _score_entity(entity_id: str, attrs: dict, patterns: tuple[str, ...], key: str) -> int:
+    """Simple scoring for likely entities for a given config key."""
     score = 0
     entity_id_lower = entity_id.lower()
     for p in patterns:
         if p in entity_id_lower:
             score += 10
-    # Prefer current-day Octopus rates over previous-day
-    if "current_day" in entity_id_lower:
-        score += 20
-    if "previous_day" in entity_id_lower:
-        score -= 20
-    # Avoid predbat leftovers
+
+    if key == "agile_entity":
+        # Prefer current-day Octopus rates over previous-day
+        if "current_day" in entity_id_lower:
+            score += 20
+        if "previous_day" in entity_id_lower:
+            score -= 20
+        if attrs.get("rates"):
+            score += 15
+    elif key == "solar_forecast_entity":
+        if attrs.get("forecast"):
+            score += 15
+        if "today" in entity_id_lower or "tomorrow" in entity_id_lower:
+            score -= 10
+    elif key == "battery_soc_entity":
+        if attrs.get("unit_of_measurement") in ("kWh", "%"):
+            score += 5
+    elif key == "inverter_mode_entity":
+        if "mode" in entity_id_lower:
+            score += 5
+
+    # Avoid predbat leftovers for all keys
     if "predbat" in entity_id_lower:
         score -= 50
-    # Prefer entities that expose a rates/forecast list
-    if attrs.get("rates"):
-        score += 15
-    if attrs.get("forecast"):
-        score += 15
+
     attrs_str = " ".join(str(k) + " " + str(v) for k, v in attrs.items()).lower()
     for p in patterns:
         if p in attrs_str:
@@ -71,7 +83,7 @@ def _guess_entities(hass) -> dict[str, str]:
             ("battery_soc_entity", BATTERY_SOC_PATTERNS),
             ("inverter_mode_entity", INVERTER_MODE_PATTERNS),
         ):
-            s = _score_entity(entity_id, attrs, patterns)
+            s = _score_entity(entity_id, attrs, patterns, key)
             # Only consider this entity if at least one pattern matches
             if s <= 0:
                 continue
