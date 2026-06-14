@@ -72,6 +72,9 @@ def _guess_entities(hass) -> dict[str, str]:
             ("inverter_mode_entity", INVERTER_MODE_PATTERNS),
         ):
             s = _score_entity(entity_id, attrs, patterns)
+            # Only consider this entity if at least one pattern matches
+            if s <= 0:
+                continue
             if s > scores[key]:
                 scores[key] = s
                 best[key] = entity_id
