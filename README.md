@@ -52,6 +52,7 @@ After setup, open **Settings > Devices & Services > Battery Solar Optimiser > Co
 - **Max charge / discharge power** — kW
 - **Round-trip efficiency** — 0.5–1.0
 - **Hourly load** — average W
+- **Display timezone** — IANA timezone name used for human-facing slot times, e.g. `Europe/London`
 
 ## Dashboard
 

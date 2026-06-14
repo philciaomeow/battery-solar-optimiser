@@ -159,6 +159,10 @@ def _schema(
                 "round_trip_efficiency",
                 default=float(defaults.get("round_trip_efficiency", 0.95)),
             ): NumberSelector(NumberSelectorConfig(min=0.5, max=1.0, step=0.01)),
+            vol.Required(
+                "display_timezone",
+                default=defaults.get("display_timezone", "Europe/London"),
+            ): TextSelector(TextSelectorConfig(type="text")),
         }
     )
 

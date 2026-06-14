@@ -3,39 +3,117 @@ views:
   - title: Battery Solar Optimiser
     path: battery-solar-optimiser
     icon: mdi:solar-power-variant
+    type: masonry
     cards:
+      - type: markdown
+        title: Battery Solar Optimiser
+        content: |
+          Simple 24-hour battery plan using Agile prices, solar forecast and your configured household load.
+
+          Times are shown in Home Assistant local time.
+
       - type: entities
         title: Current recommendation
+        show_header_toggle: false
         entities:
           - entity: select.battery_solar_optimiser_action
             name: Recommended action
           - entity: sensor.battery_solar_optimiser_plan
-            name: Current slot
+            name: Current slot action
           - entity: sensor.battery_solar_optimiser_next_action
-            name: Next active slot
+            name: Current/next action window
           - entity: sensor.battery_solar_optimiser_estimated_cost
-            name: Estimated 24h cost
+            name: Estimated 24h charge cost
+
+      - type: custom:apexcharts-card
+        graph_span: 24h
+        span:
+          start: hour
+        header:
+          show: true
+          title: Projected battery level
+          show_states: false
+        yaxis:
+          - min: 0
+            decimals: 1
+            apex_config:
+              title:
+                text: kWh
+        series:
+          - entity: sensor.battery_solar_optimiser_plan
+            name: Projected battery
+            color: '#16a34a'
+            type: area
+            opacity: 0.25
+            stroke_width: 3
+            data_generator: |
+              const slots = entity.attributes.slots || [];
+              const soc = entity.attributes.projected_soc_kwh || [];
+              return slots.map((slot, idx) => [new Date(slot.start).getTime(), Number(soc[idx] || 0)]);
+
+      - type: custom:apexcharts-card
+        graph_span: 24h
+        span:
+          start: hour
+        header:
+          show: true
+          title: Agile price and solar forecast
+          show_states: false
+        yaxis:
+          - id: price
+            decimals: 1
+            apex_config:
+              title:
+                text: p/kWh
+          - id: solar
+            opposite: true
+            decimals: 2
+            apex_config:
+              title:
+                text: kWh/slot
+        series:
+          - entity: sensor.battery_solar_optimiser_plan
+            name: Agile price
+            yaxis_id: price
+            color: '#2563eb'
+            type: column
+            data_generator: |
+              const slots = entity.attributes.slots || [];
+              return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.price || 0)]);
+          - entity: sensor.battery_solar_optimiser_plan
+            name: Solar
+            yaxis_id: solar
+            color: '#f59e0b'
+            type: line
+            stroke_width: 3
+            data_generator: |
+              const slots = entity.attributes.slots || [];
+              return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.solar_kwh || 0)]);
+
       - type: markdown
-        title: 24 hour plan
+        title: 24 hour slot plan
         content: >-
           {% set slots = state_attr('sensor.battery_solar_optimiser_plan', 'slots') or [] %}
           {% set soc = state_attr('sensor.battery_solar_optimiser_plan', 'projected_soc_kwh') or [] %}
           {% if slots | length == 0 %}
           No plan is available yet. Check that Octopus Agile and solar source entities are available.
           {% else %}
-          | Time | Action | Power | Price | Solar | Projected battery |
+          | Time | Action | Power | Price | Solar | Battery |
           |---|---:|---:|---:|---:|---:|
-          {% for s in slots[:24] %}
-          | {{ as_timestamp(s.start) | timestamp_custom('%H:%M', true) }} | {{ s.action }} | {{ s.action_kw }} kW | {{ (s.price * 100) | round(1) }}p | {{ s.solar_kwh | round(2) }} kWh | {{ soc[loop.index0] if loop.index0 < soc|length else '?' }} kWh |
+          {% for s in slots[:48] %}
+          | {% if s.is_current %}**{{ s.start_local }}**{% else %}{{ s.start_local }}{% endif %} | {{ s.action }} | {{ s.action_kw }} kW | {{ s.price | round(1) }}p | {{ s.solar_kwh | round(2) }} kWh | {{ soc[loop.index0] if loop.index0 < soc|length else '?' }} kWh |
           {% endfor %}
           {% endif %}
+
       - type: markdown
         title: Totals
         content: >-
           {% set p = 'sensor.battery_solar_optimiser_plan' %}
+          **Current slot:** {{ state_attr(p, 'current_slot_start_local') }}–{{ state_attr(p, 'current_slot_end_local') }}  
           **Initial battery:** {{ state_attr(p, 'initial_soc_kwh') }} kWh  
           **Total import:** {{ state_attr(p, 'total_import_kwh') }} kWh  
           **Total export:** {{ state_attr(p, 'total_export_kwh') }} kWh
+
       - type: history-graph
         title: Optimiser history
         hours_to_show: 24

@@ -6,15 +6,12 @@ that respond to charging / discharging / hold commands.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
-
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.util.dt import utcnow
+from homeassistant.util import dt as dt_util
 
 from .const import ACTION_CHARGING, ACTION_DISCHARGING, ACTION_HOLD, DOMAIN, SELECT_OPTIONS
 from .sensor import BatterySolarOptimiserCoordinator
@@ -63,7 +60,7 @@ class BatterySolarOptimiserActionSelect(SelectEntity, RestoreEntity):
         plan = self.coordinator.plan
         if not plan or not plan.slots:
             return ACTION_HOLD
-        now = utcnow()
+        now = dt_util.utcnow()
         for slot in plan.slots:
             if slot.start <= now < slot.end:
                 return _map_action(slot.action)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
@@ -17,7 +18,7 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.util.dt import utcnow
+from homeassistant.util import dt as dt_util
 
 from .const import (
     ACTION_CHARGING,
@@ -47,6 +48,47 @@ def _parse_dt(value: Any) -> datetime | None:
         except ValueError:
             return None
     return None
+
+
+def _local_time(value: datetime, time_zone: str = "Europe/London") -> str:
+    """Format a datetime in the configured display timezone."""
+    try:
+        tz = ZoneInfo(time_zone or "Europe/London")
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo("Europe/London")
+    return value.astimezone(tz).strftime("%H:%M")
+
+
+def _current_slot(plan: Plan, now: datetime):
+    """Return the slot containing now, or None."""
+    for slot in plan.slots:
+        if slot.start <= now < slot.end:
+            return slot
+    return None
+
+
+def _next_non_hold_slot(plan: Plan, now: datetime):
+    """Return the next non-hold slot starting at/after now, or None."""
+    for slot in plan.slots:
+        if slot.start >= now and _map_action(slot.action) != ACTION_HOLD:
+            return slot
+    return None
+
+
+def _contiguous_action_end(plan: Plan, current) -> datetime:
+    """Return the end time of the current contiguous action block."""
+    end = current.end
+    found = False
+    for slot in plan.slots:
+        if slot is current:
+            found = True
+            continue
+        if not found:
+            continue
+        if _map_action(slot.action) != _map_action(current.action):
+            break
+        end = slot.end
+    return end
 
 
 def _solar_heuristic(now: datetime, capacity_kwh: float) -> list[tuple[datetime, float]]:
@@ -116,9 +158,19 @@ class BatterySolarOptimiserCoordinator:
         self.entities: list[SensorEntity] = []
         self._listeners = []
 
+    @property
+    def cfg(self) -> dict[str, Any]:
+        """Return setup data merged with UI options."""
+        return {**self.config_entry.data, **self.config_entry.options}
+
+    @property
+    def display_timezone(self) -> str:
+        """Return the timezone used for human-facing plan times."""
+        return str(self.cfg.get("display_timezone", "Europe/London"))
+
     async def async_refresh(self, now: datetime | None = None) -> None:
         """Refresh optimisation plan and push updates to entities."""
-        cfg = {**self.config_entry.data, **self.config_entry.options}
+        cfg = self.cfg
         state_api = self.hass.states
 
         soc_entity = cfg.get("battery_soc_entity", "")
@@ -168,11 +220,11 @@ class BatterySolarOptimiserCoordinator:
         # If no detailed forecast, use a simple heuristic based on installed capacity.
         if not solar_forecast:
             solar_forecast = _solar_heuristic(
-                utcnow(), float(cfg.get("pv_capacity_kwh", 5.0))
+                dt_util.utcnow(), float(cfg.get("pv_capacity_kwh", 5.0))
             )
 
         self.plan = build_plan(
-            now=utcnow(),
+            now=dt_util.utcnow(),
             agile_rates=agile_rates,
             solar_forecast=solar_forecast,
             battery_capacity_kwh=float(cfg.get("battery_capacity_kwh", 5.0)),
@@ -184,7 +236,7 @@ class BatterySolarOptimiserCoordinator:
             efficiency=float(cfg.get("round_trip_efficiency", 0.95)),
         )
 
-        self.data["last_updated"] = utcnow().isoformat()
+        self.data["last_updated"] = dt_util.utcnow().isoformat()
 
         for entity in self.entities:
             if entity.hass:
@@ -250,10 +302,10 @@ class BatterySolarOptimiserPlanSensor(BatterySolarOptimiserBaseSensor):
         plan = self.coordinator.plan
         if not plan or not plan.slots:
             return "unknown"
-        now = utcnow()
-        for slot in plan.slots:
-            if slot.start <= now < slot.end:
-                return _map_action(slot.action)
+        now = dt_util.utcnow()
+        slot = _current_slot(plan, now)
+        if slot:
+            return _map_action(slot.action)
         return "unknown"
 
     @property
@@ -261,18 +313,28 @@ class BatterySolarOptimiserPlanSensor(BatterySolarOptimiserBaseSensor):
         plan = self.coordinator.plan
         if not plan:
             return {}
+        now = dt_util.utcnow()
+        current = _current_slot(plan, now)
+        tz = self.coordinator.display_timezone
         return {
             "slots": [
                 {
                     "start": s.start.isoformat(),
                     "end": s.end.isoformat(),
+                    "start_local": _local_time(s.start, tz),
+                    "end_local": _local_time(s.end, tz),
                     "price": s.price,
                     "solar_kwh": s.solar_kwh,
                     "action": _map_action(s.action),
                     "action_kw": round(s.action_kw, 3),
+                    "is_current": s is current,
                 }
                 for s in plan.slots
             ],
+            "current_slot_start": current.start.isoformat() if current else None,
+            "current_slot_end": current.end.isoformat() if current else None,
+            "current_slot_start_local": _local_time(current.start, tz) if current else None,
+            "current_slot_end_local": _local_time(current.end, tz) if current else None,
             "initial_soc_kwh": plan.initial_soc_kwh,
             "projected_soc_kwh": [round(x, 3) for x in plan.projected_soc],
             "total_import_kwh": round(plan.total_import_kwh, 3),
@@ -314,10 +376,16 @@ class BatterySolarOptimiserNextActionSensor(BatterySolarOptimiserBaseSensor):
         plan = self.coordinator.plan
         if not plan or not plan.slots:
             return "unknown"
-        now = utcnow()
-        for slot in plan.slots:
-            if slot.start >= now and _map_action(slot.action) != ACTION_HOLD:
-                return f"{_map_action(slot.action)} at {slot.start.strftime('%H:%M')}" 
+        now = dt_util.utcnow()
+        current = _current_slot(plan, now)
+        tz = self.coordinator.display_timezone
+        if current and _map_action(current.action) != ACTION_HOLD:
+            end = _contiguous_action_end(plan, current)
+            return f"{_map_action(current.action)} until {_local_time(end, tz)}"
+
+        next_slot = _next_non_hold_slot(plan, now)
+        if next_slot:
+            return f"{_map_action(next_slot.action)} at {_local_time(next_slot.start, tz)}"
         return ACTION_HOLD
 
     @property
@@ -325,7 +393,15 @@ class BatterySolarOptimiserNextActionSensor(BatterySolarOptimiserBaseSensor):
         plan = self.coordinator.plan
         if not plan or not plan.slots:
             return {}
+        now = dt_util.utcnow()
+        current = _current_slot(plan, now)
+        next_slot = _next_non_hold_slot(plan, now)
+        tz = self.coordinator.display_timezone
         return {
-            "current_slot_action": _map_action(plan.slots[0].action) if plan.slots else ACTION_HOLD,
-            "current_slot_power_kw": round(plan.slots[0].action_kw, 3) if plan.slots else 0,
+            "current_slot_action": _map_action(current.action) if current else ACTION_HOLD,
+            "current_slot_power_kw": round(current.action_kw, 3) if current else 0,
+            "current_slot_start_local": _local_time(current.start, tz) if current else None,
+            "current_slot_end_local": _local_time(current.end, tz) if current else None,
+            "next_non_hold_action": _map_action(next_slot.action) if next_slot else ACTION_HOLD,
+            "next_non_hold_start_local": _local_time(next_slot.start, tz) if next_slot else None,
         }
