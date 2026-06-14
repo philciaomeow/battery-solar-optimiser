@@ -143,3 +143,49 @@ def test_hold_does_not_drain_battery_at_flat_price():
     )
     assert all(slot.action == "hold" for slot in plan.slots)
     assert min(plan.projected_soc) == 5.0
+
+
+def test_first_expensive_slot_is_discharged():
+    now = datetime(2026, 6, 14, 12, 30, tzinfo=timezone.utc)
+    # Mirrors the live case: 16:00 is the first peak slot but just below the
+    # old 80th percentile threshold, so it must still be discharged.
+    pence = [12.684, 13.755, 13.503, 13.923, 14.543, 14.553, 15.729, 33.484, 33.999, 35.343, 36.309, 36.907, 35.553, 21.903]
+    rates = [(now + timedelta(minutes=30 * i), p / 100.0) for i, p in enumerate(pence)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=0.5,
+        current_soc_kwh=5.0,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        missing_rate_pence=30.0,
+    )
+    assert plan.slots[7].price == 33.484
+    assert plan.slots[7].action == "discharge"
+
+
+def test_full_battery_pre_peak_slots_stay_in_charge_mode():
+    now = datetime(2026, 6, 14, 12, 30, tzinfo=timezone.utc)
+    pence = [12.684, 13.755, 13.503, 13.923, 14.543, 14.553, 15.729, 33.484, 33.999]
+    rates = [(now + timedelta(minutes=30 * i), p / 100.0) for i, p in enumerate(pence)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=0.5,
+        current_soc_kwh=5.0,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        missing_rate_pence=30.0,
+    )
+    assert any(slot.action == "charge" for slot in plan.slots[:7])
+    assert all(slot.action in ("charge", "discharge") for slot in plan.slots[:9])

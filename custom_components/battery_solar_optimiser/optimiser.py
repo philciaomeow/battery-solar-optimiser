@@ -106,18 +106,25 @@ def build_plan(
     prices = [s.price for s in slots if s.price > 0]
     if len(prices) >= 2:
         cheap_threshold = _percentile(prices, 0.20)
-        expensive_threshold = _percentile(prices, 0.80)
+        percentile_expensive_threshold = _percentile(prices, 0.80)
     elif prices:
         cheap_threshold = prices[0]
-        expensive_threshold = prices[0]
+        percentile_expensive_threshold = prices[0]
     else:
         cheap_threshold = missing_rate_pence * 0.75
-        expensive_threshold = missing_rate_pence
+        percentile_expensive_threshold = missing_rate_pence
 
     # Require a meaningful spread before arbitrage; with mostly flat prices,
     # preserve battery rather than cycling pointlessly.
     price_spread = max(prices) - min(prices) if prices else 0.0
     arbitrage_enabled = price_spread >= 3.0
+    # The 80th percentile can miss the first slot of a peak block by a few
+    # tenths of a penny. Use a softer dynamic threshold so the whole expensive
+    # block is captured, not just its absolute top.
+    expensive_threshold = min(
+        percentile_expensive_threshold,
+        cheap_threshold + (price_spread * 0.55),
+    )
 
     soc = max(current_soc_kwh, min_soc_kwh)
     projected_soc = [soc]
@@ -139,13 +146,18 @@ def build_plan(
         action = "hold"
         is_forced = False
 
+        future_expensive = max_future_price >= expensive_threshold
+        current_is_discounted = slot.price < (max_future_price - 2.0)
+
         if net_load <= 0 and soc < battery_capacity_kwh - 0.05:
             # Excess solar: charge even if energy price is uninteresting.
             action = "charge"
-        elif arbitrage_enabled and slot.price <= cheap_threshold and slot.price > 0:
-            # Charge before later expensive slots if the spread beats round-trip loss.
+        elif arbitrage_enabled and future_expensive and current_is_discounted and slot.price < expensive_threshold:
+            # Charge/prepare before later expensive slots if the spread beats
+            # round-trip loss. If already full, keep charge as a "stay ready"
+            # signal rather than downgrading to hold.
             profitable_future = max_future_price > (slot.price / max(efficiency, 0.01)) + 2.0
-            if profitable_future and soc < battery_capacity_kwh - 0.05:
+            if profitable_future:
                 action = "charge"
                 is_forced = True
         elif arbitrage_enabled and slot.price >= expensive_threshold and soc > min_soc_kwh + 0.05:
@@ -188,8 +200,9 @@ def build_plan(
                 soc += charge
                 action_kw = charge / slot_duration_h
                 slot_import += charge / max(efficiency, 0.01)
-            else:
-                action = "hold"
+            # If the battery is already full, keep the action as charge with
+            # 0 kW so the plan/inverter stays in ready-to-charge mode before
+            # the expensive block.
             slot_import += max(0, net_load)
             slot_export += max(0, -net_load)
 
