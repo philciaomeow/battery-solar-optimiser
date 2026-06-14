@@ -269,3 +269,25 @@ def test_negative_slots_after_peak_recharge_battery():
     post_peak_soc = min(plan.projected_soc[1:9])
     later_soc = max(plan.projected_soc[9:15])
     assert later_soc > post_peak_soc
+
+
+def test_slot_override_forces_action_before_simulation():
+    now = datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc)
+    rates = [(now + timedelta(minutes=30 * i), 0.20) for i in range(48)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=0.5,
+        current_soc_kwh=2.0,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        slot_overrides={0: "charge", 1: "discharge"},
+    )
+    assert plan.slots[0].action == "charge"
+    assert plan.slots[1].action == "discharge"
+    assert plan.projected_soc[1] > plan.projected_soc[0]

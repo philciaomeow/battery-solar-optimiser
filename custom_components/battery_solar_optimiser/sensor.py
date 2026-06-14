@@ -184,6 +184,7 @@ class BatterySolarOptimiserCoordinator:
             "status": "idle",
             "last_updated": None,
             "next_update_due": None,
+            "slot_overrides": {},
         }
         self.plan: Plan | None = None
         self.entities: list[SensorEntity] = []
@@ -194,6 +195,19 @@ class BatterySolarOptimiserCoordinator:
         for entity in self.entities:
             if entity.hass:
                 entity.async_write_ha_state()
+
+    def set_slot_override(self, slot_index: int, action: str | None) -> None:
+        """Store an override for a relative plan slot."""
+        overrides = dict(self.data.get("slot_overrides", {}))
+        if action in ("charge", "discharge"):
+            overrides[slot_index] = action
+        else:
+            overrides.pop(slot_index, None)
+        self.data["slot_overrides"] = overrides
+
+    def get_slot_override(self, slot_index: int) -> str | None:
+        """Return the internal override action for a relative plan slot."""
+        return dict(self.data.get("slot_overrides", {})).get(slot_index)
 
     def _next_scheduled_refresh(self, now: datetime, low_soc: bool = False) -> datetime:
         """Return the next expected refresh time.
@@ -292,6 +306,7 @@ class BatterySolarOptimiserCoordinator:
             previous_day_rates=previous_day_rates,
             historical_rates=historical_rates,
             lookback_hours=int(float(cfg.get("lookback_hours", 12))),
+            slot_overrides=self.data.get("slot_overrides", {}),
         )
 
         source_counts = {"actual": 0, "previous_day": 0, "fallback": 0}
@@ -390,6 +405,7 @@ class BatterySolarOptimiserPlanSensor(BatterySolarOptimiserBaseSensor):
                 "price_source": s.price_source,
                 "solar_kwh": round(s.solar_kwh, 3),
                 "action": _map_action(s.action),
+                "override": self.coordinator.get_slot_override(idx) or "none",
                 "battery_percent": round((plan.projected_soc[idx + 1] / capacity) * 100, 1),
                 "slot_cost_gbp": s.slot_cost_gbp,
                 "cumulative_cost_gbp": s.cumulative_cost_gbp,

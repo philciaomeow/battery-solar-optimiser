@@ -74,6 +74,7 @@ def build_plan(
     previous_day_rates: list[tuple[datetime, float]] | None = None,
     historical_rates: list[tuple[datetime, float]] | None = None,
     lookback_hours: int = 12,
+    slot_overrides: dict[int, str] | None = None,
 ) -> Plan:
     """Build a charge/discharge plan over the next horizon_slots half-hours.
 
@@ -224,6 +225,13 @@ def build_plan(
         next_a = smoothed[i + 1]
         if curr_a != prev_a and curr_a != next_a:
             smoothed[i] = prev_a
+
+    # Manual overrides win over the automatic recommendation and are applied
+    # before simulation so projected SOC, costs, and the live action select all
+    # reflect what will be sent to the inverter automation.
+    for idx, action in (slot_overrides or {}).items():
+        if 0 <= idx < len(smoothed) and action in ("charge", "discharge"):
+            smoothed[idx] = action
 
     # Second pass: simulate with actions, enforcing SOC and calculating per-slot costs.
     for i, slot in enumerate(slots):

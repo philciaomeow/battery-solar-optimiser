@@ -114,6 +114,9 @@ views:
             .bso-discharge { background: #7f1d1d; color: #f87171; }
             .bso-hold { background: #374151; color: #d1d5db; }
             .bso-current { background: rgba(96,165,250,.16); }
+            .bso-forced-charge { background: rgba(16,185,129,.20); }
+            .bso-forced-discharge { background: rgba(239,68,68,.20); }
+            .bso-override { font-size: .78rem; color: var(--secondary-text-color); }
           </style>
           <div class="bso-plan-wrap">
             <table class="bso-plan">
@@ -121,6 +124,7 @@ views:
                 <tr>
                   <th>Time</th>
                   <th>Status</th>
+                  <th>Override</th>
                   <th>Agile</th>
                   <th>Bat %</th>
                   <th>Solar kWh</th>
@@ -130,9 +134,10 @@ views:
               </thead>
               <tbody>
                 {% for s in slots %}
-                <tr class="{% if s.is_current %}bso-current{% endif %}">
+                <tr class="{% if s.override == 'charge' %}bso-forced-charge{% elif s.override == 'discharge' %}bso-forced-discharge{% elif s.is_current %}bso-current{% endif %}">
                   <td><strong>{{ s.start_local }}</strong></td>
                   <td><span class="bso-badge {% if s.action == 'charging' %}bso-charge{% elif s.action == 'discharging' %}bso-discharge{% else %}bso-hold{% endif %}">{{ s.action }}</span></td>
+                  <td class="bso-override">{% if s.override == 'charge' %}Force charge{% elif s.override == 'discharge' %}Force discharge{% else %}No change{% endif %}</td>
                   <td>{{ s.price | round(1) }}p</td>
                   <td>{{ s.battery_percent | round(0) }}%</td>
                   <td>{{ s.solar_kwh | round(2) }}</td>
@@ -143,6 +148,108 @@ views:
               </tbody>
             </table>
           </div>
+
+
+      - type: entities
+        title: Slot overrides
+        show_header_toggle: false
+        entities:
+          - entity: select.battery_solar_optimiser_slot_00_override
+            name: Slot 00 override
+          - entity: select.battery_solar_optimiser_slot_01_override
+            name: Slot 01 override
+          - entity: select.battery_solar_optimiser_slot_02_override
+            name: Slot 02 override
+          - entity: select.battery_solar_optimiser_slot_03_override
+            name: Slot 03 override
+          - entity: select.battery_solar_optimiser_slot_04_override
+            name: Slot 04 override
+          - entity: select.battery_solar_optimiser_slot_05_override
+            name: Slot 05 override
+          - entity: select.battery_solar_optimiser_slot_06_override
+            name: Slot 06 override
+          - entity: select.battery_solar_optimiser_slot_07_override
+            name: Slot 07 override
+          - entity: select.battery_solar_optimiser_slot_08_override
+            name: Slot 08 override
+          - entity: select.battery_solar_optimiser_slot_09_override
+            name: Slot 09 override
+          - entity: select.battery_solar_optimiser_slot_10_override
+            name: Slot 10 override
+          - entity: select.battery_solar_optimiser_slot_11_override
+            name: Slot 11 override
+          - entity: select.battery_solar_optimiser_slot_12_override
+            name: Slot 12 override
+          - entity: select.battery_solar_optimiser_slot_13_override
+            name: Slot 13 override
+          - entity: select.battery_solar_optimiser_slot_14_override
+            name: Slot 14 override
+          - entity: select.battery_solar_optimiser_slot_15_override
+            name: Slot 15 override
+          - entity: select.battery_solar_optimiser_slot_16_override
+            name: Slot 16 override
+          - entity: select.battery_solar_optimiser_slot_17_override
+            name: Slot 17 override
+          - entity: select.battery_solar_optimiser_slot_18_override
+            name: Slot 18 override
+          - entity: select.battery_solar_optimiser_slot_19_override
+            name: Slot 19 override
+          - entity: select.battery_solar_optimiser_slot_20_override
+            name: Slot 20 override
+          - entity: select.battery_solar_optimiser_slot_21_override
+            name: Slot 21 override
+          - entity: select.battery_solar_optimiser_slot_22_override
+            name: Slot 22 override
+          - entity: select.battery_solar_optimiser_slot_23_override
+            name: Slot 23 override
+          - entity: select.battery_solar_optimiser_slot_24_override
+            name: Slot 24 override
+          - entity: select.battery_solar_optimiser_slot_25_override
+            name: Slot 25 override
+          - entity: select.battery_solar_optimiser_slot_26_override
+            name: Slot 26 override
+          - entity: select.battery_solar_optimiser_slot_27_override
+            name: Slot 27 override
+          - entity: select.battery_solar_optimiser_slot_28_override
+            name: Slot 28 override
+          - entity: select.battery_solar_optimiser_slot_29_override
+            name: Slot 29 override
+          - entity: select.battery_solar_optimiser_slot_30_override
+            name: Slot 30 override
+          - entity: select.battery_solar_optimiser_slot_31_override
+            name: Slot 31 override
+          - entity: select.battery_solar_optimiser_slot_32_override
+            name: Slot 32 override
+          - entity: select.battery_solar_optimiser_slot_33_override
+            name: Slot 33 override
+          - entity: select.battery_solar_optimiser_slot_34_override
+            name: Slot 34 override
+          - entity: select.battery_solar_optimiser_slot_35_override
+            name: Slot 35 override
+          - entity: select.battery_solar_optimiser_slot_36_override
+            name: Slot 36 override
+          - entity: select.battery_solar_optimiser_slot_37_override
+            name: Slot 37 override
+          - entity: select.battery_solar_optimiser_slot_38_override
+            name: Slot 38 override
+          - entity: select.battery_solar_optimiser_slot_39_override
+            name: Slot 39 override
+          - entity: select.battery_solar_optimiser_slot_40_override
+            name: Slot 40 override
+          - entity: select.battery_solar_optimiser_slot_41_override
+            name: Slot 41 override
+          - entity: select.battery_solar_optimiser_slot_42_override
+            name: Slot 42 override
+          - entity: select.battery_solar_optimiser_slot_43_override
+            name: Slot 43 override
+          - entity: select.battery_solar_optimiser_slot_44_override
+            name: Slot 44 override
+          - entity: select.battery_solar_optimiser_slot_45_override
+            name: Slot 45 override
+          - entity: select.battery_solar_optimiser_slot_46_override
+            name: Slot 46 override
+          - entity: select.battery_solar_optimiser_slot_47_override
+            name: Slot 47 override
 
       - type: markdown
         title: Totals
