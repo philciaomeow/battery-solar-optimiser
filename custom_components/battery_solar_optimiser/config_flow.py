@@ -56,6 +56,9 @@ def _score_entity(entity_id: str, attrs: dict, patterns: tuple[str, ...], key: s
             score += 15
         if "today" in entity_id_lower or "tomorrow" in entity_id_lower:
             score -= 10
+        # If no forecast entity exists, allow a plain solar production sensor as fallback
+        if "power_production" in entity_id_lower or "energy_production" in entity_id_lower:
+            score += 2
     elif key == "battery_soc_entity":
         if attrs.get("unit_of_measurement") in ("kWh", "%"):
             score += 5
@@ -116,7 +119,7 @@ def _schema(
                 "agile_entity",
                 default=defaults.get("agile_entity", guesses.get("agile_entity", "")),
             ): EntitySelector(EntitySelectorConfig(domain=["event", "sensor"])),
-            vol.Optional(
+            vol.Required(
                 "solar_forecast_entity",
                 default=defaults.get("solar_forecast_entity") or guesses.get("solar_forecast_entity"),
             ): EntitySelector(EntitySelectorConfig(domain="sensor")),
