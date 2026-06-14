@@ -6,9 +6,8 @@ import logging
 from datetime import datetime, time, timedelta
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
@@ -24,12 +23,6 @@ from .const import (
 from .optimiser import Plan, build_plan
 
 _LOGGER = logging.getLogger(__name__)
-
-SENSOR_ICONS = {
-    ACTION_CHARGING: "mdi:battery-charging",
-    ACTION_DISCHARGING: "mdi:battery-minus",
-    ACTION_HOLD: "mdi:battery",
-}
 
 
 def _map_action(action: str) -> str:
@@ -174,7 +167,6 @@ class BatterySolarOptimiserPlanSensor(BatterySolarOptimiserBaseSensor):
 
     _attr_name = "Plan"
     _attr_icon = "mdi:chart-timeline"
-    _attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
     def native_value(self) -> str:
@@ -217,7 +209,6 @@ class BatterySolarOptimiserCostSensor(BatterySolarOptimiserBaseSensor):
     _attr_name = "Estimated Cost"
     _attr_icon = "mdi:currency-gbp"
     _attr_native_unit_of_measurement = "GBP"
-    _attr_state_class = SensorStateClass.TOTAL
 
     @property
     def native_value(self) -> float | None:
@@ -241,7 +232,7 @@ class BatterySolarOptimiserNextActionSensor(BatterySolarOptimiserBaseSensor):
         now = utcnow()
         for slot in plan.slots:
             if slot.start >= now and _map_action(slot.action) != ACTION_HOLD:
-                return f"{_map_action(slot.action)} at {slot.start.strftime('%H:%M')}"
+                return f"{_map_action(slot.action)} at {slot.start.strftime('%H:%M')}" 
         return ACTION_HOLD
 
     @property
