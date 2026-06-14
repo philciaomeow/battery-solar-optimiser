@@ -38,6 +38,37 @@ def _map_action(action: str) -> str:
     }.get(action, ACTION_HOLD)
 
 
+def _parse_dt(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _solar_heuristic(now: datetime, capacity_kwh: float) -> list[tuple[datetime, float]]:
+    """Fallback solar estimate: generate a simple bell curve for today."""
+    sunrise = 6
+    sunset = 20
+    peak = 13
+    slots = []
+    base = now.replace(minute=0, second=0, microsecond=0)
+    for i in range(48):
+        slot_start = base + timedelta(minutes=30 * i)
+        hour = slot_start.hour + slot_start.minute / 60
+        if sunrise <= hour <= sunset:
+            factor = max(0, 1 - abs(hour - peak) / ((sunset - sunrise) / 2))
+            # Roughly 80% of daily capacity spread across daylight slots
+            val = (capacity_kwh * 0.8 / ((sunset - sunrise) * 2)) * factor
+        else:
+            val = 0.0
+        slots.append((slot_start, val))
+    return slots
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -54,7 +85,7 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
-    # Refresh when the source entities become available or change.
+    # Refresh when the configured source entities become available or change.
     source_entities = [
         config_entry.data.get("agile_entity"),
         config_entry.data.get("solar_forecast_entity"),
@@ -89,7 +120,8 @@ class BatterySolarOptimiserCoordinator:
         cfg = self.config_entry.data
         state_api = self.hass.states
 
-        soc_state = state_api.get(cfg.get("battery_soc_entity", ""))
+        soc_entity = cfg.get("battery_soc_entity", "")
+        soc_state = state_api.get(soc_entity)
         try:
             current_soc_kwh = float(soc_state.state) if soc_state else 0.0
         except (ValueError, TypeError):
@@ -98,19 +130,15 @@ class BatterySolarOptimiserCoordinator:
         agile_entity = cfg.get("agile_entity", "")
         agile_rates: list[tuple[datetime, float]] = []
         rates_state = state_api.get(agile_entity)
-        if rates_state:
-            _LOGGER.info(
-                "BSO agile attrs: %s", list(rates_state.attributes.keys()))
-            rates_attr = rates_state.attributes.get("rates")
-            _LOGGER.info("BSO rates type=%s len=%s", type(rates_attr).__name__, len(rates_attr) if hasattr(rates_attr, "__len__") else "n/a")
         if rates_state and isinstance(rates_state.attributes.get("rates"), list):
             for r in rates_state.attributes["rates"]:
                 try:
-                    start = datetime.fromisoformat(r["start"])
+                    start = _parse_dt(r.get("start"))
+                    if start is None:
+                        continue
                     price = float(r["value_inc_vat"])
                     agile_rates.append((start, price))
-                except (KeyError, ValueError, TypeError) as err:
-                    _LOGGER.info("BSO rate parse error: %s in %s", err, r)
+                except (KeyError, ValueError, TypeError):
                     continue
 
         solar_entity = cfg.get("solar_forecast_entity", "")
@@ -119,22 +147,20 @@ class BatterySolarOptimiserCoordinator:
         if solar_state and isinstance(solar_state.attributes.get("forecast"), list):
             for f in solar_state.attributes["forecast"]:
                 try:
-                    start = datetime.fromisoformat(f["period_start"])
+                    start = _parse_dt(f.get("period_start"))
+                    if start is None:
+                        continue
                     val = float(f.get("pv_estimate", 0)) / 2  # kWh per 30 min
                     solar_forecast.append((start, val))
-                except (KeyError, ValueError, TypeError) as err:
-                    _LOGGER.info("BSO solar parse error: %s in %s", err, f)
+                except (KeyError, ValueError, TypeError):
                     continue
 
-        _LOGGER.info(
-            "BSO refresh: rates=%d solar=%d soc=%.2f",
-            len(agile_rates), len(solar_forecast), current_soc_kwh)
-        _LOGGER.info(
-            "BSO source entities present: agile=%s solar=%s soc=%s",
-            state_api.get(agile_entity) is not None,
-            state_api.get(solar_entity) is not None,
-            state_api.get(cfg.get("battery_soc_entity", "")) is not None,
-        )
+        # If no detailed forecast, use a simple heuristic based on installed capacity.
+        if not solar_forecast:
+            solar_forecast = _solar_heuristic(
+                utcnow(), float(cfg.get("pv_capacity_kwh", 5.0))
+            )
+
         self.plan = build_plan(
             now=utcnow(),
             agile_rates=agile_rates,
@@ -167,7 +193,7 @@ class BatterySolarOptimiserCoordinator:
             )
 
             async def _low_soc_refresh(_now: datetime) -> None:
-                soc_state = self.hass.states.get(cfg.get("battery_soc_entity", ""))
+                soc_state = self.hass.states.get(soc_entity)
                 try:
                     current_soc = float(soc_state.state)
                 except (ValueError, TypeError):
