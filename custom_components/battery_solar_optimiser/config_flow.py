@@ -26,8 +26,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 AGILE_ENTITY_PATTERNS = ("octopus_energy", "agile")
-SOLAR_ENTITY_PATTERNS = ("forecast_solar", "solcast", "solar_forecast", "pv")
-BATTERY_SOC_PATTERNS = ("battery_soc", "battery_state_of_charge", "soc")
+SOLAR_ENTITY_PATTERNS = ("forecast_solar", "solcast", "solar_forecast")
+BATTERY_SOC_PATTERNS = ("battery_soc", "battery_state_of_charge", "bms_soc")
 INVERTER_MODE_PATTERNS = ("solar_inverter", "inverter_mode", "solax")
 
 
@@ -38,6 +38,19 @@ def _score_entity(entity_id: str, attrs: dict, patterns: tuple[str, ...]) -> int
     for p in patterns:
         if p in entity_id_lower:
             score += 10
+    # Prefer current-day Octopus rates over previous-day
+    if "current_day" in entity_id_lower:
+        score += 20
+    if "previous_day" in entity_id_lower:
+        score -= 20
+    # Avoid predbat leftovers
+    if "predbat" in entity_id_lower:
+        score -= 50
+    # Prefer entities that expose a rates/forecast list
+    if attrs.get("rates"):
+        score += 15
+    if attrs.get("forecast"):
+        score += 15
     attrs_str = " ".join(str(k) + " " + str(v) for k, v in attrs.items()).lower()
     for p in patterns:
         if p in attrs_str:
@@ -85,7 +98,7 @@ def _schema(
                 "solar_forecast_entity",
                 default=defaults.get("solar_forecast_entity", guesses.get("solar_forecast_entity", "")),
             ): EntitySelector(EntitySelectorConfig(domain="sensor")),
-            vol.Required(
+            vol.Optional(
                 "battery_soc_entity",
                 default=defaults.get("battery_soc_entity", guesses.get("battery_soc_entity", "")),
             ): EntitySelector(EntitySelectorConfig(domain="sensor")),
