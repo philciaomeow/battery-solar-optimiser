@@ -168,6 +168,10 @@ class BatterySolarOptimiserPlanSensor(BatterySolarOptimiserBaseSensor):
     _attr_name = "Plan"
     _attr_icon = "mdi:chart-timeline"
 
+    def __init__(self, coordinator: BatterySolarOptimiserCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_plan"
+
     @property
     def native_value(self) -> str:
         plan = self.coordinator.plan
@@ -210,6 +214,10 @@ class BatterySolarOptimiserCostSensor(BatterySolarOptimiserBaseSensor):
     _attr_icon = "mdi:currency-gbp"
     _attr_native_unit_of_measurement = "GBP"
 
+    def __init__(self, coordinator: BatterySolarOptimiserCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_estimated_cost"
+
     @property
     def native_value(self) -> float | None:
         plan = self.coordinator.plan
@@ -223,6 +231,10 @@ class BatterySolarOptimiserNextActionSensor(BatterySolarOptimiserBaseSensor):
 
     _attr_name = "Next Action"
     _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, coordinator: BatterySolarOptimiserCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_next_action"
 
     @property
     def native_value(self) -> str:
