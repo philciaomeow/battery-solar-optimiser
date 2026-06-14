@@ -38,10 +38,14 @@ class Plan:
 def _align_to_half_hour(now: datetime) -> datetime:
     """Round `now` down to the current 30-minute boundary."""
     if now.minute < 30:
-        target = now.replace(minute=0, second=0, microsecond=0)
-    else:
-        target = now.replace(minute=30, second=0, microsecond=0)
-    return target
+        return now.replace(minute=0, second=0, microsecond=0)
+    return now.replace(minute=30, second=0, microsecond=0)
+
+
+def _to_utc(t: datetime) -> datetime:
+    if t.tzinfo is None:
+        return t.replace(tzinfo=timezone.utc)
+    return t.astimezone(timezone.utc)
 
 
 def build_plan(
@@ -63,33 +67,44 @@ def build_plan(
     load_kw = load_w / 1000.0
     load_per_slot = load_kw * slot_duration_h
 
-    # Align to the next half-hour boundary so slots match Agile slot boundaries
     first_slot = _align_to_half_hour(now)
     start_times = [first_slot + timedelta(minutes=30 * i) for i in range(horizon_slots)]
 
-    # Convert Agile rates from GBP/kWh to p/kWh and build lookup
     price_map: dict[datetime, float] = {}
     for t, p in agile_rates:
-        # Normalise to naive UTC if needed for matching
-        key = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t.astimezone(timezone.utc)
-        price_map[key] = p * 100.0  # pence per kWh
+        price_map[_to_utc(t)] = p * 100.0  # p/kWh
 
     solar_map: dict[datetime, float] = {}
     for t, s in solar_forecast:
-        key = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t.astimezone(timezone.utc)
-        solar_map[key] = s
+        solar_map[_to_utc(t)] = s
 
     slots: list[Slot] = []
     for t in start_times:
-        key = t.astimezone(timezone.utc)
         slots.append(
             Slot(
                 start=t,
                 end=t + timedelta(minutes=30),
-                price=price_map.get(key, 0.0),
-                solar_kwh=solar_map.get(key, 0.0),
+                price=price_map.get(_to_utc(t), 0.0),
+                solar_kwh=solar_map.get(_to_utc(t), 0.0),
             )
         )
+
+    # Price thresholds for charge/discharge decisions
+    prices = [s.price for s in slots if s.price > 0]
+    if len(prices) >= 3:
+        sorted_prices = sorted(prices)
+        cheap_threshold = sorted_prices[len(sorted_prices) // 3]  # lower third
+        expensive_threshold = sorted_prices[(2 * len(sorted_prices)) // 3]  # upper third
+    elif prices:
+        mean = sum(prices) / len(prices)
+        cheap_threshold = mean * 0.85
+        expensive_threshold = mean * 1.15
+    else:
+        cheap_threshold = 999.0
+        expensive_threshold = 0.0
+
+    # Effective round-trip cost of storing/imported energy
+    breakeven_sell_price = cheap_threshold / efficiency
 
     soc = max(current_soc_kwh, min_soc_kwh)
     projected_soc = [soc]
@@ -98,80 +113,84 @@ def build_plan(
 
     for slot in slots:
         net_load = load_per_slot - slot.solar_kwh
+        is_cheap = slot.price <= cheap_threshold and slot.price > 0
+        is_expensive = slot.price >= expensive_threshold and slot.price > 0
+        action = "hold"
+        action_kw = 0.0
+
         if net_load <= 0:
+            # Excess solar. Soak into battery if room, otherwise export.
             available = battery_capacity_kwh - soc
             charge = min(
                 available,
                 max_charge_kw * slot_duration_h * efficiency,
                 -net_load,
             )
-            soc += charge
-            slot.action = "charge"
-            slot.action_kw = charge / slot_duration_h
+            if charge > 0.001:
+                soc += charge
+                action = "charge"
+                action_kw = charge / slot_duration_h
             total_export += max(0, -net_load - charge)
         else:
-            available_discharge = min(
-                max(0, soc - min_soc_kwh),
-                max_discharge_kw * slot_duration_h,
-            )
-            if available_discharge >= net_load:
-                discharge_energy = min(net_load * efficiency, available_discharge)
-                soc -= discharge_energy / efficiency
-                slot.action = "discharge"
-                slot.action_kw = discharge_energy / slot_duration_h
+            # Need energy. Prefer solar first, then decide battery vs grid.
+            if is_expensive and soc > min_soc_kwh + 0.05:
+                # Discharge to cover load (and more if profitable)
+                available = min(
+                    soc - min_soc_kwh,
+                    max_discharge_kw * slot_duration_h,
+                )
+                # Cover at least net load; optionally export more if very profitable
+                discharge = min(available, net_load / efficiency)
+                if slot.price > breakeven_sell_price * 1.2:
+                    # Export surplus at very high prices
+                    discharge = available
+                    total_export += (discharge * efficiency - net_load)
+                soc -= discharge / efficiency
+                action = "discharge"
+                action_kw = discharge / slot_duration_h
+                remaining = net_load - discharge * efficiency
+                if remaining > 0:
+                    total_import += remaining
+            elif is_cheap and soc < battery_capacity_kwh - 0.05:
+                # Charge from grid to cover this and future load
+                charge = min(
+                    battery_capacity_kwh - soc,
+                    max_charge_kw * slot_duration_h * efficiency,
+                )
+                soc += charge
+                action = "charge"
+                action_kw = charge / slot_duration_h
+                total_import += net_load + charge
             else:
-                soc -= available_discharge / efficiency
-                remaining = net_load - available_discharge
-                total_import += remaining
-                if available_discharge > 0:
-                    slot.action = "discharge"
-                    slot.action_kw = available_discharge / slot_duration_h
+                # Neutral price: cover load from battery if convenient, else grid
+                available = min(
+                    max(0, soc - min_soc_kwh),
+                    max_discharge_kw * slot_duration_h,
+                )
+                if available >= net_load / efficiency:
+                    discharge = net_load / efficiency
+                    soc -= discharge / efficiency
+                    action = "discharge"
+                    action_kw = discharge / slot_duration_h
                 else:
-                    slot.action = "hold"
-                    slot.action_kw = 0.0
-            soc = max(soc, min_soc_kwh)
+                    soc -= available / efficiency
+                    remaining = net_load - available * efficiency
+                    total_import += max(0, remaining)
+                    if available > 0.001:
+                        action = "discharge"
+                        action_kw = available / slot_duration_h
 
+        slot.action = action
+        slot.action_kw = round(action_kw, 3)
+        soc = max(min(soc, battery_capacity_kwh), min_soc_kwh)
         projected_soc.append(soc)
-
-    # Price arbitrage: charge from grid in cheap slots, but never below min_soc after.
-    if slots:
-        avg_price = sum(s.price for s in slots) / len(slots)
-        sorted_by_price = sorted(range(len(slots)), key=lambda i: slots[i].price)
-
-        for idx in sorted_by_price:
-            slot = slots[idx]
-            if slot.price >= avg_price:
-                continue
-            future_prices = [
-                slots[j].price
-                for j in range(idx + 1, min(idx + 12, len(slots)))
-            ]
-            if not future_prices or slot.price >= max(future_prices, default=0):
-                continue
-            available = battery_capacity_kwh - projected_soc[idx]
-            charge_amount = min(
-                available,
-                max_charge_kw * slot_duration_h * efficiency,
-            )
-            if charge_amount <= 0:
-                continue
-            safe = True
-            for k in range(idx, len(slots)):
-                if projected_soc[k + 1] + charge_amount < min_soc_kwh:
-                    safe = False
-                    break
-            if not safe:
-                continue
-            for k in range(idx, len(slots)):
-                projected_soc[k + 1] += charge_amount
-            slot.action = "charge"
-            slot.action_kw += charge_amount / slot_duration_h
-            total_import += charge_amount
 
     estimated_cost = 0.0
     for slot in slots:
-        if slot.action == "charge" and slot.price:
+        if slot.action == "charge":
             estimated_cost += (slot.action_kw * slot_duration_h) * (slot.price / 100)
+        # importing to cover net load when not charging is captured via total_import but
+        # we only estimate battery-driven import cost here for simplicity
 
     return Plan(
         slots=slots,
