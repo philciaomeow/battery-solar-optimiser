@@ -109,7 +109,8 @@ class BatterySolarOptimiserCoordinator:
                     start = datetime.fromisoformat(r["start"])
                     price = float(r["value_inc_vat"])
                     agile_rates.append((start, price))
-                except (KeyError, ValueError, TypeError):
+                except (KeyError, ValueError, TypeError) as err:
+                    _LOGGER.info("BSO rate parse error: %s in %s", err, r)
                     continue
 
         solar_entity = cfg.get("solar_forecast_entity", "")
@@ -121,7 +122,8 @@ class BatterySolarOptimiserCoordinator:
                     start = datetime.fromisoformat(f["period_start"])
                     val = float(f.get("pv_estimate", 0)) / 2  # kWh per 30 min
                     solar_forecast.append((start, val))
-                except (KeyError, ValueError, TypeError):
+                except (KeyError, ValueError, TypeError) as err:
+                    _LOGGER.info("BSO solar parse error: %s in %s", err, f)
                     continue
 
         _LOGGER.info(
