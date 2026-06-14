@@ -35,9 +35,13 @@ def _score_entity(entity_id: str, attrs: dict, patterns: tuple[str, ...], key: s
     """Simple scoring for likely entities for a given config key."""
     score = 0
     entity_id_lower = entity_id.lower()
+    pattern_match = False
     for p in patterns:
         if p in entity_id_lower:
             score += 10
+            pattern_match = True
+    if not pattern_match:
+        return -1
 
     if key == "agile_entity":
         # Prefer current-day Octopus rates over previous-day
@@ -76,6 +80,9 @@ def _guess_entities(hass) -> dict[str, str]:
     scores = {"agile_entity": 0, "solar_forecast_entity": 0, "battery_soc_entity": 0, "inverter_mode_entity": 0}
     for state in hass.states.async_all():
         entity_id = state.entity_id
+        # Skip non-entity helpers for device matching
+        if entity_id.split(".")[0] in ("automation", "script", "scene"):
+            continue
         attrs = state.attributes
         for key, patterns in (
             ("agile_entity", AGILE_ENTITY_PATTERNS),
