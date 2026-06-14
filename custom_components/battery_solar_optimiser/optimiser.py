@@ -36,11 +36,11 @@ class Plan:
 
 
 def _align_to_half_hour(now: datetime) -> datetime:
-    """Round `now` up to the next 30-minute boundary."""
+    """Round `now` down to the current 30-minute boundary."""
     if now.minute < 30:
-        target = now.replace(minute=30, second=0, microsecond=0)
+        target = now.replace(minute=0, second=0, microsecond=0)
     else:
-        target = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        target = now.replace(minute=30, second=0, microsecond=0)
     return target
 
 

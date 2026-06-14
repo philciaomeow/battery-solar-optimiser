@@ -49,7 +49,7 @@ def test_cheap_charge_triggered():
     now = datetime(2026, 6, 14, 0, 0, 0, tzinfo=timezone.utc)
     rates = [(now + timedelta(minutes=30 * i), 0.30) for i in range(48)]
     rates[2] = (rates[2][0], 0.05)  # one cheap slot at 01:00
-    cheap_slot_index = 1  # aligned first slot is 00:30, so cheap slot becomes index 1
+    cheap_slot_index = 2  # aligned first slot is 00:00, so cheap slot becomes index 2
     solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
     plan = build_plan(
         now=now,
@@ -87,7 +87,7 @@ def test_respects_min_soc():
 
 def test_aligns_to_half_hour():
     now = datetime(2026, 6, 14, 9, 17, 0, tzinfo=timezone.utc)
-    rates = [(datetime(2026, 6, 14, 9, 30, tzinfo=timezone.utc), 0.10)]
+    rates = [(datetime(2026, 6, 14, 9, 0, tzinfo=timezone.utc), 0.10)]
     solar = []
     plan = build_plan(
         now=now,
@@ -102,5 +102,5 @@ def test_aligns_to_half_hour():
         efficiency=0.95,
         horizon_slots=1,
     )
-    assert plan.slots[0].start == datetime(2026, 6, 14, 9, 30, tzinfo=timezone.utc)
+    assert plan.slots[0].start == datetime(2026, 6, 14, 9, 0, tzinfo=timezone.utc)
     assert plan.slots[0].price == 10.0  # p/kWh
