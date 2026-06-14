@@ -34,9 +34,10 @@ async def async_setup_entry(
     async_add_entities,
 ) -> None:
     """Set up the select platform."""
-    coordinator = BatterySolarOptimiserCoordinator(hass, config_entry)
-    await coordinator.async_refresh()
-    async_add_entities([BatterySolarOptimiserActionSelect(coordinator)])
+    coordinator: BatterySolarOptimiserCoordinator = hass.data[DOMAIN][config_entry.entry_id]
+    entity = BatterySolarOptimiserActionSelect(coordinator)
+    coordinator.entities.append(entity)
+    async_add_entities([entity])
 
 
 class BatterySolarOptimiserActionSelect(SelectEntity, RestoreEntity):
@@ -75,16 +76,3 @@ class BatterySolarOptimiserActionSelect(SelectEntity, RestoreEntity):
             ACTION_DISCHARGING: "mdi:battery-minus",
             ACTION_HOLD: "mdi:battery",
         }.get(self.current_option or ACTION_HOLD, "mdi:battery")
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        # Subscribe to coordinator refresh events
-        self.async_on_remove(
-            self.coordinator.hass.bus.async_listen(
-                "state_changed", self._handle_state_changed
-            )
-        )
-
-    @callback
-    def _handle_state_changed(self, event: dict[str, Any]) -> None:
-        self.async_write_ha_state()

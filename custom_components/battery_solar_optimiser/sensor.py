@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.event import async_call_later, async_track_time_change, async_track_time_interval
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_change,
+    async_track_time_interval,
+)
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util.dt import utcnow
 
@@ -39,16 +44,33 @@ async def async_setup_entry(
     async_add_entities,
 ) -> None:
     """Set up the sensor platform."""
-    coordinator = BatterySolarOptimiserCoordinator(hass, config_entry)
-    # Delay initial refresh until source entities (e.g. Octopus Energy event) are available.
+    coordinator: BatterySolarOptimiserCoordinator = hass.data[DOMAIN][config_entry.entry_id]
+    entities = [
+        BatterySolarOptimiserPlanSensor(coordinator),
+        BatterySolarOptimiserCostSensor(coordinator),
+        BatterySolarOptimiserNextActionSensor(coordinator),
+    ]
+    coordinator.entities.extend(entities)
+
+    async_add_entities(entities)
+
+    # Refresh when the source entities become available or change.
+    source_entities = [
+        config_entry.data.get("agile_entity"),
+        config_entry.data.get("solar_forecast_entity"),
+        config_entry.data.get("battery_soc_entity"),
+    ]
+    source_entities = [e for e in source_entities if e]
+
+    async def _source_changed(event):
+        new_state = event.data.get("new_state")
+        if new_state and new_state.state not in (None, "unavailable", "unknown"):
+            await coordinator.async_refresh()
+
+    async_track_state_change_event(hass, source_entities, _source_changed)
+
+    # First refresh after 30 seconds, then on the schedule below.
     async_call_later(hass, 30, coordinator.async_refresh)
-    async_add_entities(
-        [
-            BatterySolarOptimiserPlanSensor(coordinator),
-            BatterySolarOptimiserCostSensor(coordinator),
-            BatterySolarOptimiserNextActionSensor(coordinator),
-        ]
-    )
 
 
 class BatterySolarOptimiserCoordinator:
@@ -59,10 +81,11 @@ class BatterySolarOptimiserCoordinator:
         self.config_entry = config_entry
         self.data: dict[str, Any] = {}
         self.plan: Plan | None = None
+        self.entities: list[SensorEntity] = []
         self._listeners = []
 
     async def async_refresh(self, now: datetime | None = None) -> None:
-        """Refresh optimisation plan."""
+        """Refresh optimisation plan and push updates to entities."""
         cfg = self.config_entry.data
         state_api = self.hass.states
 
@@ -75,12 +98,6 @@ class BatterySolarOptimiserCoordinator:
         agile_entity = cfg.get("agile_entity", "")
         agile_rates: list[tuple[datetime, float]] = []
         rates_state = state_api.get(agile_entity)
-        _LOGGER.debug(
-            "Agile entity %s state present: %s attrs_keys: %s",
-            agile_entity,
-            rates_state is not None,
-            list(rates_state.attributes.keys()) if rates_state else None,
-        )
         if rates_state and isinstance(rates_state.attributes.get("rates"), list):
             for r in rates_state.attributes["rates"]:
                 try:
@@ -102,12 +119,6 @@ class BatterySolarOptimiserCoordinator:
                 except (KeyError, ValueError, TypeError):
                     continue
 
-        _LOGGER.info(
-            "BSO refresh: rates=%d solar=%d soc=%s",
-            len(agile_rates),
-            len(solar_forecast),
-            current_soc_kwh,
-        )
         self.plan = build_plan(
             now=utcnow(),
             agile_rates=agile_rates,
@@ -122,11 +133,39 @@ class BatterySolarOptimiserCoordinator:
         )
 
         self.data["last_updated"] = utcnow().isoformat()
-        _LOGGER.info(
-            "BSO plan built with %d slots, first price %.2fp",
-            len(self.plan.slots) if self.plan else 0,
-            self.plan.slots[0].price if self.plan and self.plan.slots else 0,
-        )
+
+        for entity in self.entities:
+            if entity.hass:
+                entity.async_write_ha_state()
+
+        # Schedule regular and low-SOC refreshes once, when first entity is added.
+        if not self._listeners:
+            min_soc_kwh = float(cfg.get("min_soc_kwh", 0.5))
+            self._listeners.append(
+                async_track_time_change(
+                    self.hass,
+                    self.async_refresh,
+                    minute=[25, 55],
+                    second=0,
+                )
+            )
+
+            async def _low_soc_refresh(_now: datetime) -> None:
+                soc_state = self.hass.states.get(cfg.get("battery_soc_entity", ""))
+                try:
+                    current_soc = float(soc_state.state)
+                except (ValueError, TypeError):
+                    return
+                if current_soc < min_soc_kwh:
+                    await self.async_refresh()
+
+            self._listeners.append(
+                async_track_time_interval(
+                    self.hass,
+                    _low_soc_refresh,
+                    timedelta(minutes=5),
+                )
+            )
 
 
 class BatterySolarOptimiserBaseSensor(SensorEntity, RestoreEntity):
@@ -142,42 +181,6 @@ class BatterySolarOptimiserBaseSensor(SensorEntity, RestoreEntity):
             manufacturer="Battery Solar Optimiser",
             model="Battery Optimiser",
         )
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        cfg = self.coordinator.config_entry.data
-        min_soc_kwh = float(cfg.get("min_soc_kwh", 0.5))
-
-        # Refresh at :25 and :55 each hour — 5 mins before Agile slot changes
-        self.coordinator._listeners.append(
-            async_track_time_change(
-                self.coordinator.hass,
-                self.coordinator.async_refresh,
-                minute=[25, 55],
-                second=0,
-            )
-        )
-
-        # Low SOC fast refresh: every 5 minutes if battery is below min_soc
-        async def _low_soc_refresh(_now: datetime) -> None:
-            soc_state = self.coordinator.hass.states.get(cfg.get("battery_soc_entity", ""))
-            try:
-                current_soc = float(soc_state.state)
-            except (ValueError, TypeError):
-                return
-            if current_soc < min_soc_kwh:
-                await self.coordinator.async_refresh()
-
-        self.coordinator._listeners.append(
-            async_track_time_interval(
-                self.coordinator.hass,
-                _low_soc_refresh,
-                timedelta(minutes=5),
-            )
-        )
-
-        for unsub in self.coordinator._listeners:
-            self.async_on_remove(unsub)
 
 
 class BatterySolarOptimiserPlanSensor(BatterySolarOptimiserBaseSensor):
