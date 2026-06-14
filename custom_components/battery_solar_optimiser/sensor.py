@@ -119,6 +119,9 @@ class BatterySolarOptimiserCoordinator:
                 except (KeyError, ValueError, TypeError):
                     continue
 
+        _LOGGER.info(
+            "BSO refresh: rates=%d solar=%d soc=%.2f",
+            len(agile_rates), len(solar_forecast), current_soc_kwh)
         self.plan = build_plan(
             now=utcnow(),
             agile_rates=agile_rates,
