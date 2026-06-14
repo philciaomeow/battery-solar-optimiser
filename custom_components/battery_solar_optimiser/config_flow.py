@@ -118,16 +118,16 @@ def _schema(
             ): EntitySelector(EntitySelectorConfig(domain=["event", "sensor"])),
             vol.Optional(
                 "solar_forecast_entity",
-                default=defaults.get("solar_forecast_entity", guesses.get("solar_forecast_entity", "")),
+                default=defaults.get("solar_forecast_entity") or guesses.get("solar_forecast_entity"),
             ): EntitySelector(EntitySelectorConfig(domain="sensor")),
             vol.Optional(
                 "battery_soc_entity",
-                default=defaults.get("battery_soc_entity", guesses.get("battery_soc_entity", "")),
+                default=defaults.get("battery_soc_entity") or guesses.get("battery_soc_entity"),
             ): EntitySelector(EntitySelectorConfig(domain="sensor")),
             vol.Optional(
                 "inverter_mode_entity",
-                default=defaults.get("inverter_mode_entity", guesses.get("inverter_mode_entity", "")),
-            ): EntitySelector(EntitySelectorConfig(domain=["select", "sensor"])),
+                default=defaults.get("inverter_mode_entity") or guesses.get("inverter_mode_entity"),
+            ): EntitySelector(EntitySelectorConfig(domain=["select", "sensor", "switch", "number"])),
             vol.Required(
                 "battery_capacity_kwh",
                 default=float(defaults.get("battery_capacity_kwh", 5.0)),
