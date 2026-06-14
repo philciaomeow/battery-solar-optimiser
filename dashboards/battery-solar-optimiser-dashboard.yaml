@@ -13,9 +13,15 @@ views:
           Times are shown using the integration display timezone. Unknown Agile slots use the configured fallback price so the battery is not drained before unpublished rates.
 
       - type: entities
-        title: Current recommendation
+        title: Status
         show_header_toggle: false
         entities:
+          - entity: sensor.battery_solar_optimiser_status
+            name: Optimiser status
+          - entity: sensor.battery_solar_optimiser_last_updated
+            name: Plan last updated
+          - entity: sensor.battery_solar_optimiser_next_update_due
+            name: Next update due
           - entity: select.battery_solar_optimiser_action
             name: Recommended action
           - entity: sensor.battery_solar_optimiser_plan

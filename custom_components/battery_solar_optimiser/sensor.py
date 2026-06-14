@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
@@ -122,6 +122,9 @@ async def async_setup_entry(
         BatterySolarOptimiserPlanSensor(coordinator),
         BatterySolarOptimiserCostSensor(coordinator),
         BatterySolarOptimiserNextActionSensor(coordinator),
+        BatterySolarOptimiserLastUpdatedSensor(coordinator),
+        BatterySolarOptimiserNextUpdateSensor(coordinator),
+        BatterySolarOptimiserStatusSensor(coordinator),
     ]
     coordinator.entities.extend(entities)
 
@@ -153,10 +156,38 @@ class BatterySolarOptimiserCoordinator:
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         self.hass = hass
         self.config_entry = config_entry
-        self.data: dict[str, Any] = {}
+        self.data: dict[str, Any] = {
+            "status": "idle",
+            "last_updated": None,
+            "next_update_due": None,
+        }
         self.plan: Plan | None = None
         self.entities: list[SensorEntity] = []
         self._listeners = []
+
+    def _write_entity_states(self) -> None:
+        """Push coordinator state to all registered entities."""
+        for entity in self.entities:
+            if entity.hass:
+                entity.async_write_ha_state()
+
+    def _next_scheduled_refresh(self, now: datetime, low_soc: bool = False) -> datetime:
+        """Return the next expected refresh time.
+
+        Normal refreshes run at :25 and :55. While battery SOC is below the
+        configured minimum, the low-SOC guard checks every five minutes.
+        """
+        candidates = []
+        for hour_offset in range(3):
+            base = now + timedelta(hours=hour_offset)
+            for minute in (25, 55):
+                candidate = base.replace(minute=minute, second=0, microsecond=0)
+                if candidate > now:
+                    candidates.append(candidate)
+        next_due = min(candidates) if candidates else now + timedelta(minutes=30)
+        if low_soc:
+            next_due = min(next_due, now + timedelta(minutes=5))
+        return next_due
 
     @property
     def cfg(self) -> dict[str, Any]:
@@ -171,6 +202,10 @@ class BatterySolarOptimiserCoordinator:
     async def async_refresh(self, now: datetime | None = None) -> None:
         """Refresh optimisation plan and push updates to entities."""
         cfg = self.cfg
+        refresh_started = dt_util.utcnow()
+        self.data["status"] = "running"
+        self._write_entity_states()
+
         state_api = self.hass.states
 
         soc_entity = cfg.get("battery_soc_entity", "")
@@ -220,11 +255,12 @@ class BatterySolarOptimiserCoordinator:
         # If no detailed forecast, use a simple heuristic based on installed capacity.
         if not solar_forecast:
             solar_forecast = _solar_heuristic(
-                dt_util.utcnow(), float(cfg.get("pv_capacity_kwh", 5.0))
+                refresh_started, float(cfg.get("pv_capacity_kwh", 5.0))
             )
 
+        low_soc = current_soc_kwh < float(cfg.get("min_soc_kwh", 0.5))
         self.plan = build_plan(
-            now=dt_util.utcnow(),
+            now=refresh_started,
             agile_rates=agile_rates,
             solar_forecast=solar_forecast,
             battery_capacity_kwh=float(cfg.get("battery_capacity_kwh", 5.0)),
@@ -237,11 +273,11 @@ class BatterySolarOptimiserCoordinator:
             missing_rate_pence=float(cfg.get("missing_rate_pence", 30.0)),
         )
 
-        self.data["last_updated"] = dt_util.utcnow().isoformat()
-
-        for entity in self.entities:
-            if entity.hass:
-                entity.async_write_ha_state()
+        refresh_finished = dt_util.utcnow()
+        self.data["last_updated"] = refresh_finished
+        self.data["next_update_due"] = self._next_scheduled_refresh(refresh_finished, low_soc)
+        self.data["status"] = "idle"
+        self._write_entity_states()
 
         # Schedule regular and low-SOC refreshes once, when first entity is added.
         if not self._listeners:
@@ -407,3 +443,52 @@ class BatterySolarOptimiserNextActionSensor(BatterySolarOptimiserBaseSensor):
             "next_non_hold_action": _map_action(next_slot.action) if next_slot else ACTION_HOLD,
             "next_non_hold_start_local": _local_time(next_slot.start, tz) if next_slot else None,
         }
+
+
+class BatterySolarOptimiserLastUpdatedSensor(BatterySolarOptimiserBaseSensor):
+    """Sensor showing when the plan was last recalculated."""
+
+    _attr_name = "Last Updated"
+    _attr_icon = "mdi:clock-check-outline"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator: BatterySolarOptimiserCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_last_updated"
+
+    @property
+    def native_value(self) -> datetime | None:
+        value = self.coordinator.data.get("last_updated")
+        return value if isinstance(value, datetime) else None
+
+
+class BatterySolarOptimiserNextUpdateSensor(BatterySolarOptimiserBaseSensor):
+    """Sensor showing when the next scheduled refresh is expected."""
+
+    _attr_name = "Next Update Due"
+    _attr_icon = "mdi:clock-start"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator: BatterySolarOptimiserCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_next_update_due"
+
+    @property
+    def native_value(self) -> datetime | None:
+        value = self.coordinator.data.get("next_update_due")
+        return value if isinstance(value, datetime) else None
+
+
+class BatterySolarOptimiserStatusSensor(BatterySolarOptimiserBaseSensor):
+    """Sensor showing whether the optimiser is idle or recalculating."""
+
+    _attr_name = "Status"
+    _attr_icon = "mdi:progress-clock"
+
+    def __init__(self, coordinator: BatterySolarOptimiserCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_status"
+
+    @property
+    def native_value(self) -> str:
+        return str(self.coordinator.data.get("status") or "idle")
