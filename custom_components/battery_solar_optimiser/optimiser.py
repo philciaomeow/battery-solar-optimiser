@@ -48,6 +48,15 @@ def _to_utc(t: datetime) -> datetime:
     return t.astimezone(timezone.utc)
 
 
+def _percentile(values: list[float], p: float) -> float:
+    """Return the p-th percentile using unique sorted values."""
+    if not values:
+        return 0.0
+    s = sorted(set(values))
+    idx = int(round((len(s) - 1) * p))
+    return s[idx]
+
+
 def build_plan(
     *,
     now: datetime,
@@ -89,80 +98,117 @@ def build_plan(
             )
         )
 
-    # Price thresholds for charge/discharge decisions
     prices = [s.price for s in slots if s.price > 0]
-    if len(prices) >= 3:
-        sorted_prices = sorted(prices)
-        cheap_threshold = sorted_prices[len(sorted_prices) // 3]  # lower third
-        expensive_threshold = sorted_prices[(2 * len(sorted_prices)) // 3]  # upper third
+    if len(prices) >= 2:
+        cheap_threshold = _percentile(prices, 0.20)
+        expensive_threshold = _percentile(prices, 0.80)
     elif prices:
-        mean = sum(prices) / len(prices)
-        cheap_threshold = mean * 0.85
-        expensive_threshold = mean * 1.15
+        cheap_threshold = prices[0]
+        expensive_threshold = prices[0]
     else:
         cheap_threshold = 999.0
         expensive_threshold = 0.0
 
-    # Effective round-trip cost of storing/imported energy
-    breakeven_sell_price = cheap_threshold / efficiency
+    # Charge from grid only if there is a future slot expensive enough to justify round-trip loss
+    breakeven_discharge_price = cheap_threshold / efficiency if cheap_threshold > 0 else 999.0
 
     soc = max(current_soc_kwh, min_soc_kwh)
     projected_soc = [soc]
     total_import = 0.0
     total_export = 0.0
 
-    for slot in slots:
+    # First pass: determine ideal action based on price and available energy
+    actions = []
+    forced = []
+    for i, slot in enumerate(slots):
         net_load = load_per_slot - slot.solar_kwh
-        is_cheap = slot.price <= cheap_threshold and slot.price > 0
-        is_expensive = slot.price >= expensive_threshold and slot.price > 0
+        future_prices = [slots[j].price for j in range(i + 1, min(i + 8, len(slots)))]
+        avg_future_price = sum(future_prices) / len(future_prices) if future_prices else slot.price
+
         action = "hold"
+        is_forced = False
+        if slot.price <= cheap_threshold and slot.price > 0 and avg_future_price > breakeven_discharge_price:
+            if soc < battery_capacity_kwh - 0.05:
+                action = "charge"
+                is_forced = True
+        elif slot.price >= expensive_threshold and slot.price > 0 and soc > min_soc_kwh + 0.05:
+            if any(p < slot.price for p in future_prices):
+                action = "discharge"
+                is_forced = True
+        elif net_load <= 0:
+            # Excess solar: soak into battery if there is room
+            if soc < battery_capacity_kwh - 0.05:
+                action = "charge"
+        actions.append(action)
+        forced.append(is_forced)
+
+    # Smoothing pass: remove single-slot flips only when the slot is NOT a price extreme
+    smoothed = actions[:]
+    for i in range(1, len(smoothed) - 1):
+        if forced[i]:
+            continue
+        prev_a = smoothed[i - 1]
+        curr_a = smoothed[i]
+        next_a = smoothed[i + 1]
+        if curr_a != prev_a and curr_a != next_a:
+            smoothed[i] = prev_a
+
+    # Second pass: simulate with actions, enforcing SOC limits
+    for i, slot in enumerate(slots):
+        net_load = load_per_slot - slot.solar_kwh
+        action = smoothed[i]
         action_kw = 0.0
 
-        if net_load <= 0:
-            # Excess solar. Soak into battery if room, otherwise export.
+        if action == "charge":
+            # Need to cover net load too if charging from grid
             available = battery_capacity_kwh - soc
             charge = min(
                 available,
                 max_charge_kw * slot_duration_h * efficiency,
-                -net_load,
             )
             if charge > 0.001:
                 soc += charge
-                action = "charge"
                 action_kw = charge / slot_duration_h
-            total_export += max(0, -net_load - charge)
-        else:
-            # Need energy. Prefer solar first, then decide battery vs grid.
-            if is_expensive and soc > min_soc_kwh + 0.05:
-                # Discharge to cover load (and more if profitable)
-                available = min(
-                    soc - min_soc_kwh,
-                    max_discharge_kw * slot_duration_h,
-                )
-                # Cover at least net load; optionally export more if very profitable
+                total_import += net_load + charge if net_load > 0 else charge
+            else:
+                action = "hold"
+                total_import += max(0, net_load)
+        elif action == "discharge":
+            available = min(
+                max(0, soc - min_soc_kwh),
+                max_discharge_kw * slot_duration_h,
+            )
+            # Cover at least net load; export any surplus if very profitable
+            if slot.price >= breakeven_discharge_price * 1.3:
+                discharge = available
+            else:
                 discharge = min(available, net_load / efficiency)
-                if slot.price > breakeven_sell_price * 1.2:
-                    # Export surplus at very high prices
-                    discharge = available
-                    total_export += (discharge * efficiency - net_load)
+
+            if discharge > 0.001:
                 soc -= discharge / efficiency
-                action = "discharge"
                 action_kw = discharge / slot_duration_h
                 remaining = net_load - discharge * efficiency
-                if remaining > 0:
-                    total_import += remaining
-            elif is_cheap and soc < battery_capacity_kwh - 0.05:
-                # Charge from grid to cover this and future load
-                charge = min(
-                    battery_capacity_kwh - soc,
-                    max_charge_kw * slot_duration_h * efficiency,
-                )
-                soc += charge
-                action = "charge"
-                action_kw = charge / slot_duration_h
-                total_import += net_load + charge
+                total_import += max(0, remaining)
+                if discharge * efficiency > net_load:
+                    total_export += discharge * efficiency - net_load
             else:
-                # Neutral price: cover load from battery if convenient, else grid
+                action = "hold"
+                total_import += max(0, net_load)
+        else:
+            # Hold: cover load from solar then battery then grid
+            if net_load <= 0:
+                available = battery_capacity_kwh - soc
+                charge = min(
+                    available,
+                    max_charge_kw * slot_duration_h * efficiency,
+                    -net_load,
+                )
+                if charge > 0.001:
+                    soc += charge
+                    action = "charge"
+                    action_kw = charge / slot_duration_h
+                total_export += max(0, -net_load - charge)
+            else:
                 available = min(
                     max(0, soc - min_soc_kwh),
                     max_discharge_kw * slot_duration_h,
@@ -189,8 +235,6 @@ def build_plan(
     for slot in slots:
         if slot.action == "charge":
             estimated_cost += (slot.action_kw * slot_duration_h) * (slot.price / 100)
-        # importing to cover net load when not charging is captured via total_import but
-        # we only estimate battery-driven import cost here for simplicity
 
     return Plan(
         slots=slots,
