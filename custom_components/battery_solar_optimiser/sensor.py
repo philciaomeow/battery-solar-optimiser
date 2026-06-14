@@ -123,9 +123,18 @@ class BatterySolarOptimiserCoordinator:
         soc_entity = cfg.get("battery_soc_entity", "")
         soc_state = state_api.get(soc_entity)
         try:
-            current_soc_kwh = float(soc_state.state) if soc_state else 0.0
+            if soc_state is None or soc_state.state in (None, "unavailable", "unknown"):
+                current_soc_kwh = cfg.get("min_soc_kwh", 0.0)
+            else:
+                raw_soc = float(soc_state.state)
+                uom = soc_state.attributes.get("unit_of_measurement", "").lower()
+                if uom == "%":
+                    # Convert percentage to kWh using configured battery capacity
+                    current_soc_kwh = raw_soc / 100.0 * cfg.get("battery_capacity_kwh", 5.0)
+                else:
+                    current_soc_kwh = raw_soc
         except (ValueError, TypeError):
-            current_soc_kwh = 0.0
+            current_soc_kwh = cfg.get("min_soc_kwh", 0.0)
 
         agile_entity = cfg.get("agile_entity", "")
         agile_rates: list[tuple[datetime, float]] = []
