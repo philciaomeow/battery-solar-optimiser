@@ -1,15 +1,15 @@
 """Tests for the Battery Solar Optimiser."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from custom_components.battery_solar_optimiser.optimiser import build_plan
 
 
-def _rates(start: datetime, count: int, base_price: float):
+def _rates(start: datetime, count: int, base_price_gbp: float):
     return [
-        (start + timedelta(minutes=30 * i), base_price + (i % 10) * 2)
+        (start + timedelta(minutes=30 * i), base_price_gbp + (i % 10) * 0.02)
         for i in range(count)
     ]
 
@@ -24,8 +24,8 @@ def _solar(start: datetime, count: int, peak_hour: int = 12):
 
 
 def test_basic_plan():
-    now = datetime(2026, 6, 14, 0, 0, 0)
-    rates = _rates(now, 48, 10.0)
+    now = datetime(2026, 6, 14, 0, 0, 0, tzinfo=timezone.utc)
+    rates = _rates(now, 48, 0.10)
     solar = _solar(now, 48)
     plan = build_plan(
         now=now,
@@ -46,9 +46,10 @@ def test_basic_plan():
 
 
 def test_cheap_charge_triggered():
-    now = datetime(2026, 6, 14, 0, 0, 0)
-    rates = [(now + timedelta(minutes=30 * i), 30.0) for i in range(48)]
-    rates[2] = (rates[2][0], 5.0)  # one cheap slot
+    now = datetime(2026, 6, 14, 0, 0, 0, tzinfo=timezone.utc)
+    rates = [(now + timedelta(minutes=30 * i), 0.30) for i in range(48)]
+    rates[2] = (rates[2][0], 0.05)  # one cheap slot at 01:00
+    cheap_slot_index = 1  # aligned first slot is 00:30, so cheap slot becomes index 1
     solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
     plan = build_plan(
         now=now,
@@ -62,12 +63,12 @@ def test_cheap_charge_triggered():
         max_discharge_kw=3.7,
         efficiency=0.95,
     )
-    assert plan.slots[2].action == "charge"
+    assert plan.slots[cheap_slot_index].action == "charge"
 
 
 def test_respects_min_soc():
-    now = datetime(2026, 6, 14, 0, 0, 0)
-    rates = [(now + timedelta(minutes=30 * i), 30.0) for i in range(48)]
+    now = datetime(2026, 6, 14, 0, 0, 0, tzinfo=timezone.utc)
+    rates = [(now + timedelta(minutes=30 * i), 0.30) for i in range(48)]
     solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
     plan = build_plan(
         now=now,
@@ -81,5 +82,25 @@ def test_respects_min_soc():
         max_discharge_kw=3.7,
         efficiency=0.95,
     )
-    # High load should pull from grid once min SOC is hit
     assert min(plan.projected_soc) >= 2.0 - 1e-6
+
+
+def test_aligns_to_half_hour():
+    now = datetime(2026, 6, 14, 9, 17, 0, tzinfo=timezone.utc)
+    rates = [(datetime(2026, 6, 14, 9, 30, tzinfo=timezone.utc), 0.10)]
+    solar = []
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=0.5,
+        current_soc_kwh=2.5,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        horizon_slots=1,
+    )
+    assert plan.slots[0].start == datetime(2026, 6, 14, 9, 30, tzinfo=timezone.utc)
+    assert plan.slots[0].price == 10.0  # p/kWh

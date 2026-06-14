@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import logging
@@ -35,6 +35,15 @@ class Plan:
     total_export_kwh: float
 
 
+def _align_to_half_hour(now: datetime) -> datetime:
+    """Round `now` up to the next 30-minute boundary."""
+    if now.minute < 30:
+        target = now.replace(minute=30, second=0, microsecond=0)
+    else:
+        target = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    return target
+
+
 def build_plan(
     *,
     now: datetime,
@@ -54,19 +63,31 @@ def build_plan(
     load_kw = load_w / 1000.0
     load_per_slot = load_kw * slot_duration_h
 
-    start_times = [now + timedelta(minutes=30 * i) for i in range(horizon_slots)]
+    # Align to the next half-hour boundary so slots match Agile slot boundaries
+    first_slot = _align_to_half_hour(now)
+    start_times = [first_slot + timedelta(minutes=30 * i) for i in range(horizon_slots)]
 
-    price_map = {t: p for t, p in agile_rates}
-    solar_map = {t: s for t, s in solar_forecast}
+    # Convert Agile rates from GBP/kWh to p/kWh and build lookup
+    price_map: dict[datetime, float] = {}
+    for t, p in agile_rates:
+        # Normalise to naive UTC if needed for matching
+        key = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t.astimezone(timezone.utc)
+        price_map[key] = p * 100.0  # pence per kWh
+
+    solar_map: dict[datetime, float] = {}
+    for t, s in solar_forecast:
+        key = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t.astimezone(timezone.utc)
+        solar_map[key] = s
 
     slots: list[Slot] = []
     for t in start_times:
+        key = t.astimezone(timezone.utc)
         slots.append(
             Slot(
                 start=t,
                 end=t + timedelta(minutes=30),
-                price=price_map.get(t, 0.0),
-                solar_kwh=solar_map.get(t, 0.0),
+                price=price_map.get(key, 0.0),
+                solar_kwh=solar_map.get(key, 0.0),
             )
         )
 
@@ -134,7 +155,6 @@ def build_plan(
             )
             if charge_amount <= 0:
                 continue
-            # Only charge if it doesn't pull projected SOC below min_soc later
             safe = True
             for k in range(idx, len(slots)):
                 if projected_soc[k + 1] + charge_amount < min_soc_kwh:
