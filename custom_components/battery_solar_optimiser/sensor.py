@@ -103,11 +103,10 @@ class BatterySolarOptimiserCoordinator:
                     continue
 
         _LOGGER.info(
-            "BSO refresh: rates=%d solar=%d soc=%s plan_slots=%d",
+            "BSO refresh: rates=%d solar=%d soc=%s",
             len(agile_rates),
             len(solar_forecast),
             current_soc_kwh,
-            horizon_slots,
         )
         self.plan = build_plan(
             now=utcnow(),
