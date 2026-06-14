@@ -243,3 +243,29 @@ def test_historical_lookback_influences_price_thresholds():
         lookback_hours=6,
     )
     assert any(slot.action == "discharge" for slot in plan.slots[:4])
+
+
+def test_negative_slots_after_peak_recharge_battery():
+    now = datetime(2026, 6, 14, 16, 0, tzinfo=timezone.utc)
+    pence = [36, 35, 34, 23, 22, 21, 8, 4, 1, -2, -4, -6, -8, -7]
+    rates = [(now + timedelta(minutes=30 * i), p / 100.0) for i, p in enumerate(pence)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=0.5,
+        current_soc_kwh=1.0,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        missing_rate_pence=30.0,
+    )
+    negative_slots = [slot for slot in plan.slots if slot.price < 0]
+    assert negative_slots
+    assert all(slot.action == "charge" for slot in negative_slots)
+    post_peak_soc = min(plan.projected_soc[1:9])
+    later_soc = max(plan.projected_soc[9:15])
+    assert later_soc > post_peak_soc

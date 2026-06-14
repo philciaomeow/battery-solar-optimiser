@@ -135,9 +135,9 @@ def build_plan(
     lookback_prices = [
         price
         for ts, price in historical_price_map.items()
-        if lookback_start <= ts < first_slot and price > 0
+        if lookback_start <= ts < first_slot
     ]
-    planning_prices = [s.price for s in slots if s.price > 0]
+    planning_prices = [s.price for s in slots]
     prices = lookback_prices + planning_prices
     if len(prices) >= 2:
         cheap_threshold = _percentile(prices, 0.20)
@@ -187,6 +187,11 @@ def build_plan(
         if net_load <= 0 and soc < battery_capacity_kwh - 0.05:
             # Excess solar: charge even if energy price is uninteresting.
             action = "charge"
+        elif arbitrage_enabled and slot.price <= cheap_threshold and slot.price < expensive_threshold:
+            # Recharge in genuinely cheap/negative slots, even if they happen
+            # after the peak discharge period rather than before it.
+            action = "charge"
+            is_forced = True
         elif arbitrage_enabled and future_expensive and current_is_discounted and slot.price < expensive_threshold:
             # Charge/prepare before later expensive slots if the spread beats
             # round-trip loss. If already full, keep charge as a "stay ready"

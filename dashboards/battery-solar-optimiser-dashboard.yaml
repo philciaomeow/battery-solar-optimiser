@@ -22,6 +22,8 @@ views:
             name: Plan last updated
           - entity: sensor.battery_solar_optimiser_next_update_due
             name: Next update due
+          - entity: button.battery_solar_optimiser_recalculate
+            name: Recalculate now
           - entity: select.battery_solar_optimiser_action
             name: Recommended action
           - entity: sensor.battery_solar_optimiser_plan
