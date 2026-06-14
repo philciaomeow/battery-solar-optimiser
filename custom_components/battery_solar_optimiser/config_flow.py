@@ -163,6 +163,10 @@ def _schema(
                 "display_timezone",
                 default=defaults.get("display_timezone", "Europe/London"),
             ): TextSelector(TextSelectorConfig(type="text")),
+            vol.Required(
+                "missing_rate_pence",
+                default=float(defaults.get("missing_rate_pence", 30.0)),
+            ): NumberSelector(NumberSelectorConfig(min=0, max=100, step=0.5, unit_of_measurement="p/kWh")),
         }
     )
 

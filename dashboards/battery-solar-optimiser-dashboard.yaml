@@ -10,7 +10,7 @@ views:
         content: |
           Simple 24-hour battery plan using Agile prices, solar forecast and your configured household load.
 
-          Times are shown in Home Assistant local time.
+          Times are shown using the integration display timezone. Unknown Agile slots use the configured fallback price so the battery is not drained before unpublished rates.
 
       - type: entities
         title: Current recommendation
@@ -23,7 +23,7 @@ views:
           - entity: sensor.battery_solar_optimiser_next_action
             name: Current/next action window
           - entity: sensor.battery_solar_optimiser_estimated_cost
-            name: Estimated 24h charge cost
+            name: Estimated 24h cost
 
       - type: custom:apexcharts-card
         graph_span: 24h
@@ -35,10 +35,11 @@ views:
           show_states: false
         yaxis:
           - min: 0
-            decimals: 1
+            max: 100
+            decimals: 0
             apex_config:
               title:
-                text: kWh
+                text: Battery %
         series:
           - entity: sensor.battery_solar_optimiser_plan
             name: Projected battery
@@ -48,8 +49,7 @@ views:
             stroke_width: 3
             data_generator: |
               const slots = entity.attributes.slots || [];
-              const soc = entity.attributes.projected_soc_kwh || [];
-              return slots.map((slot, idx) => [new Date(slot.start).getTime(), Number(soc[idx] || 0)]);
+              return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.battery_percent || 0)]);
 
       - type: custom:apexcharts-card
         graph_span: 24h
@@ -90,20 +90,51 @@ views:
               const slots = entity.attributes.slots || [];
               return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.solar_kwh || 0)]);
 
-      - type: markdown
+      - type: custom:html-template-card
         title: 24 hour slot plan
-        content: >-
+        ignore_line_breaks: true
+        content: |
           {% set slots = state_attr('sensor.battery_solar_optimiser_plan', 'slots') or [] %}
-          {% set soc = state_attr('sensor.battery_solar_optimiser_plan', 'projected_soc_kwh') or [] %}
-          {% if slots | length == 0 %}
-          No plan is available yet. Check that Octopus Agile and solar source entities are available.
-          {% else %}
-          | Time | Action | Power | Price | Solar | Battery |
-          |---|---:|---:|---:|---:|---:|
-          {% for s in slots[:48] %}
-          | {% if s.is_current %}**{{ s.start_local }}**{% else %}{{ s.start_local }}{% endif %} | {{ s.action }} | {{ s.action_kw }} kW | {{ s.price | round(1) }}p | {{ s.solar_kwh | round(2) }} kWh | {{ soc[loop.index0] if loop.index0 < soc|length else '?' }} kWh |
-          {% endfor %}
-          {% endif %}
+          <style>
+            .bso-plan-wrap { overflow-x: auto; }
+            .bso-plan { width: 100%; border-collapse: collapse; font-size: .88rem; }
+            .bso-plan th { position: sticky; top: 0; background: var(--card-background-color); z-index: 1; color: var(--secondary-text-color); font-weight: 700; }
+            .bso-plan td, .bso-plan th { padding: 6px 8px; border-bottom: 1px solid var(--divider-color); text-align: right; white-space: nowrap; }
+            .bso-plan td:first-child, .bso-plan th:first-child, .bso-plan td:nth-child(2), .bso-plan th:nth-child(2) { text-align: left; }
+            .bso-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-weight: 700; }
+            .bso-charge { background: #064e3b; color: #34d399; }
+            .bso-discharge { background: #7f1d1d; color: #f87171; }
+            .bso-hold { background: #374151; color: #d1d5db; }
+            .bso-current { background: rgba(96,165,250,.16); }
+          </style>
+          <div class="bso-plan-wrap">
+            <table class="bso-plan">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Status</th>
+                  <th>Agile</th>
+                  <th>Bat %</th>
+                  <th>Solar kWh</th>
+                  <th>Slot cost</th>
+                  <th>Daily cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for s in slots %}
+                <tr class="{% if s.is_current %}bso-current{% endif %}">
+                  <td><strong>{{ s.start_local }}</strong></td>
+                  <td><span class="bso-badge {% if s.action == 'charging' %}bso-charge{% elif s.action == 'discharging' %}bso-discharge{% else %}bso-hold{% endif %}">{{ s.action }}</span></td>
+                  <td>{{ s.price | round(1) }}p</td>
+                  <td>{{ s.battery_percent | round(0) }}%</td>
+                  <td>{{ s.solar_kwh | round(2) }}</td>
+                  <td>£{{ "%.2f" | format(s.slot_cost_gbp) }}</td>
+                  <td>£{{ "%.2f" | format(s.cumulative_cost_gbp) }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
 
       - type: markdown
         title: Totals
@@ -112,7 +143,8 @@ views:
           **Current slot:** {{ state_attr(p, 'current_slot_start_local') }}–{{ state_attr(p, 'current_slot_end_local') }}  
           **Initial battery:** {{ state_attr(p, 'initial_soc_kwh') }} kWh  
           **Total import:** {{ state_attr(p, 'total_import_kwh') }} kWh  
-          **Total export:** {{ state_attr(p, 'total_export_kwh') }} kWh
+          **Total export:** {{ state_attr(p, 'total_export_kwh') }} kWh  
+          **Estimated daily cost:** {{ states('sensor.battery_solar_optimiser_estimated_cost') }} GBP
 
       - type: history-graph
         title: Optimiser history

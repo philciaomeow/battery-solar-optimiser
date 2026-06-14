@@ -234,6 +234,7 @@ class BatterySolarOptimiserCoordinator:
             max_charge_kw=float(cfg.get("max_charge_kw", 3.7)),
             max_discharge_kw=float(cfg.get("max_discharge_kw", 3.7)),
             efficiency=float(cfg.get("round_trip_efficiency", 0.95)),
+            missing_rate_pence=float(cfg.get("missing_rate_pence", 30.0)),
         )
 
         self.data["last_updated"] = dt_util.utcnow().isoformat()
@@ -316,27 +317,28 @@ class BatterySolarOptimiserPlanSensor(BatterySolarOptimiserBaseSensor):
         now = dt_util.utcnow()
         current = _current_slot(plan, now)
         tz = self.coordinator.display_timezone
+        capacity = float(self.coordinator.cfg.get("battery_capacity_kwh", 5.0)) or 1.0
+        slots = [
+            {
+                "start": s.start.isoformat(),
+                "start_local": _local_time(s.start, tz),
+                "price": round(s.price, 3),
+                "solar_kwh": round(s.solar_kwh, 3),
+                "action": _map_action(s.action),
+                "battery_percent": round((plan.projected_soc[idx + 1] / capacity) * 100, 1),
+                "slot_cost_gbp": s.slot_cost_gbp,
+                "cumulative_cost_gbp": s.cumulative_cost_gbp,
+                "is_current": s is current,
+            }
+            for idx, s in enumerate(plan.slots)
+        ]
         return {
-            "slots": [
-                {
-                    "start": s.start.isoformat(),
-                    "end": s.end.isoformat(),
-                    "start_local": _local_time(s.start, tz),
-                    "end_local": _local_time(s.end, tz),
-                    "price": s.price,
-                    "solar_kwh": s.solar_kwh,
-                    "action": _map_action(s.action),
-                    "action_kw": round(s.action_kw, 3),
-                    "is_current": s is current,
-                }
-                for s in plan.slots
-            ],
+            "slots": slots,
             "current_slot_start": current.start.isoformat() if current else None,
             "current_slot_end": current.end.isoformat() if current else None,
             "current_slot_start_local": _local_time(current.start, tz) if current else None,
             "current_slot_end_local": _local_time(current.end, tz) if current else None,
             "initial_soc_kwh": plan.initial_soc_kwh,
-            "projected_soc_kwh": [round(x, 3) for x in plan.projected_soc],
             "total_import_kwh": round(plan.total_import_kwh, 3),
             "total_export_kwh": round(plan.total_export_kwh, 3),
         }

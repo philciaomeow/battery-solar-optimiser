@@ -53,6 +53,7 @@ After setup, open **Settings > Devices & Services > Battery Solar Optimiser > Co
 - **Round-trip efficiency** — 0.5–1.0
 - **Hourly load** — average W
 - **Display timezone** — IANA timezone name used for human-facing slot times, e.g. `Europe/London`
+- **Missing-rate fallback** — p/kWh price used for unpublished Agile slots; defaults to `30p/kWh` so unknown future periods are treated cautiously instead of as free energy
 
 ## Dashboard
 

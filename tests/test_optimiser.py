@@ -41,6 +41,7 @@ def test_basic_plan():
     assert plan.initial_soc_kwh == 2.5
     assert all(s.price > 0 for s in plan.slots)
     assert all(s.start.minute in (0, 30) for s in plan.slots)
+    assert all(hasattr(s, "slot_cost_gbp") for s in plan.slots)
 
 
 def test_cheap_charge_triggered():
@@ -101,3 +102,44 @@ def test_aligns_to_half_hour():
     )
     assert plan.slots[0].start == datetime(2026, 6, 14, 9, 0, tzinfo=timezone.utc)
     assert plan.slots[1].start == datetime(2026, 6, 14, 9, 30, tzinfo=timezone.utc)
+
+
+def test_missing_rates_use_pessimistic_fallback():
+    now = datetime(2026, 6, 14, 20, 0, tzinfo=timezone.utc)
+    rates = [(now + timedelta(minutes=30 * i), 0.10) for i in range(4)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=0.5,
+        current_soc_kwh=1.0,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        missing_rate_pence=30.0,
+    )
+    assert plan.slots[4].price == 30.0
+    assert any(slot.action == "charge" for slot in plan.slots[:4])
+
+
+def test_hold_does_not_drain_battery_at_flat_price():
+    now = datetime(2026, 6, 14, 0, 0, tzinfo=timezone.utc)
+    rates = [(now + timedelta(minutes=30 * i), 0.20) for i in range(48)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=0.5,
+        current_soc_kwh=5.0,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+    )
+    assert all(slot.action == "hold" for slot in plan.slots)
+    assert min(plan.projected_soc) == 5.0
