@@ -14,7 +14,7 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
   }
 
   getCardSize() {
-    return 8;
+    return 12;
   }
 
   _overrideEntity(index) {
@@ -82,7 +82,7 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
         <style>
           :host { display: block; }
           .wrap { overflow-x: auto; padding: 0 12px 12px; }
-          table { width: 100%; border-collapse: collapse; font-size: .88rem; min-width: 760px; }
+          table { width: 100%; border-collapse: collapse; font-size: .88rem; min-width: 900px; }
           th { position: sticky; top: 0; background: var(--card-background-color); z-index: 1; color: var(--secondary-text-color); font-weight: 700; }
           td, th { padding: 6px 8px; border-bottom: 1px solid var(--divider-color); text-align: right; white-space: nowrap; }
           td:first-child, th:first-child, td:nth-child(2), th:nth-child(2), td:nth-child(3), th:nth-child(3) { text-align: left; }
