@@ -26,7 +26,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 AGILE_ENTITY_PATTERNS = ("octopus_energy", "agile")
-SOLAR_ENTITY_PATTERNS = ("forecast_solar", "solcast", "solar_forecast")
+SOLAR_ENTITY_PATTERNS = ("forecast_solar", "solcast", "solar_forecast", "power_production", "energy_production")
 BATTERY_SOC_PATTERNS = ("battery_soc", "battery_state_of_charge", "bms_soc")
 INVERTER_MODE_PATTERNS = ("solar_inverter", "inverter_mode", "solax")
 
