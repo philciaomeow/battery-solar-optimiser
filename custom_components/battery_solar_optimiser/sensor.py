@@ -12,7 +12,7 @@ from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
-from homeassistant.helpers.restore import RestoreEntity
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util.dt import utcnow
 
 from .const import (

@@ -13,7 +13,7 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.restore import RestoreEntity
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util.dt import utcnow
 
 from .const import ACTION_CHARGING, ACTION_DISCHARGING, ACTION_HOLD, DOMAIN, SELECT_OPTIONS
