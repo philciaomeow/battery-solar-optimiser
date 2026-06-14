@@ -98,15 +98,6 @@ class BatterySolarOptimiserCoordinator:
         agile_entity = cfg.get("agile_entity", "")
         agile_rates: list[tuple[datetime, float]] = []
         rates_state = state_api.get(agile_entity)
-        _LOGGER.info(
-            "BSO source entities: agile=%s present=%s, solar=%s present=%s, soc=%s present=%s",
-            agile_entity,
-            state_api.get(agile_entity) is not None,
-            solar_entity,
-            state_api.get(solar_entity) is not None,
-            cfg.get("battery_soc_entity"),
-            state_api.get(cfg.get("battery_soc_entity", "")) is not None,
-        )
         if rates_state and isinstance(rates_state.attributes.get("rates"), list):
             for r in rates_state.attributes["rates"]:
                 try:
@@ -131,6 +122,12 @@ class BatterySolarOptimiserCoordinator:
         _LOGGER.info(
             "BSO refresh: rates=%d solar=%d soc=%.2f",
             len(agile_rates), len(solar_forecast), current_soc_kwh)
+        _LOGGER.info(
+            "BSO source entities present: agile=%s solar=%s soc=%s",
+            state_api.get(agile_entity) is not None,
+            state_api.get(solar_entity) is not None,
+            state_api.get(cfg.get("battery_soc_entity", "")) is not None,
+        )
         self.plan = build_plan(
             now=utcnow(),
             agile_rates=agile_rates,
