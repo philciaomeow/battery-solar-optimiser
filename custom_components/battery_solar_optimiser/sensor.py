@@ -102,6 +102,13 @@ class BatterySolarOptimiserCoordinator:
                 except (KeyError, ValueError, TypeError):
                     continue
 
+        _LOGGER.info(
+            "BSO refresh: rates=%d solar=%d soc=%s plan_slots=%d",
+            len(agile_rates),
+            len(solar_forecast),
+            current_soc_kwh,
+            horizon_slots,
+        )
         self.plan = build_plan(
             now=utcnow(),
             agile_rates=agile_rates,
@@ -116,6 +123,11 @@ class BatterySolarOptimiserCoordinator:
         )
 
         self.data["last_updated"] = utcnow().isoformat()
+        _LOGGER.info(
+            "BSO plan built with %d slots, first price %.2fp",
+            len(self.plan.slots) if self.plan else 0,
+            self.plan.slots[0].price if self.plan and self.plan.slots else 0,
+        )
 
 
 class BatterySolarOptimiserBaseSensor(SensorEntity, RestoreEntity):
