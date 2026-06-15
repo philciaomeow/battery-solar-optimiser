@@ -9,7 +9,55 @@ class BatterySolarOptimiserLayoutCard extends HTMLElement {
     return 12;
   }
 
+
+  async _createResponsiveColumns(hass) {
+    if (this._cards.length || !this.config?.columns) return;
+    const helpers = await window.loadCardHelpers();
+    const make = async (config, cls) => {
+      const card = await helpers.createCardElement(config);
+      card.hass = hass;
+      const wrap = document.createElement('div');
+      wrap.className = cls;
+      wrap.appendChild(card);
+      this._cards.push(card);
+      return wrap;
+    };
+
+    const root = document.createElement('div');
+    root.className = 'bso-dashboard-layout';
+    if (this.config.header) root.appendChild(await make(this.config.header, 'header'));
+
+    const main = document.createElement('div');
+    main.className = 'two-column-grid';
+    for (const [index, cfg] of this.config.columns.entries()) {
+      main.appendChild(await make(cfg, `column column-${index + 1}`));
+    }
+    root.appendChild(main);
+
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host { display: block; }
+        .bso-dashboard-layout { display: flex; flex-direction: column; gap: 12px; }
+        .two-column-grid {
+          display: grid;
+          grid-template-columns: minmax(360px, 1fr) minmax(360px, 1fr);
+          gap: 12px;
+          align-items: start;
+        }
+        .header, .column { min-width: 0; }
+        @media (max-width: 980px) {
+          .two-column-grid { display: flex; flex-direction: column; }
+        }
+      </style>
+    `;
+    this.shadowRoot.appendChild(root);
+  }
+
   async _createCards(hass) {
+    if (this.config?.columns) {
+      await this._createResponsiveColumns(hass);
+      return;
+    }
     if (this._cards.length || !this.config) return;
     const helpers = await window.loadCardHelpers();
     const make = async (config, cls) => {
@@ -82,10 +130,12 @@ class BatterySolarOptimiserLayoutCard extends HTMLElement {
   }
 }
 
-customElements.define('bso-layout-card', BatterySolarOptimiserLayoutCard);
+if (!customElements.get('bso-layout-card')) customElements.define('bso-layout-card', BatterySolarOptimiserLayoutCard);
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: 'bso-layout-card',
-  name: 'Battery Solar Optimiser Layout Card',
-  description: 'Responsive layout wrapper for the Battery Solar Optimiser dashboard',
-});
+if (!window.customCards.some((card) => card.type === 'bso-layout-card')) {
+  window.customCards.push({
+    type: 'bso-layout-card',
+    name: 'Battery Solar Optimiser Layout Card',
+    description: 'Responsive layout wrapper for the Battery Solar Optimiser dashboard',
+  });
+}

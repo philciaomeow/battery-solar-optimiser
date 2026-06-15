@@ -37,6 +37,7 @@ jobs:
       - name: Check dashboard JavaScript syntax
         run: |
           node --check www/bso-plan-card.js
+          node --check www/bso-layout-card.js
 
       - name: Run tests
         run: pytest tests/ -v
