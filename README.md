@@ -37,7 +37,7 @@ It is designed for people who want something simpler and easier to reason about 
 - Refreshes shortly before Agile slot changes.
 - Exposes a manual recalculate button.
 - Exposes manual per-slot override controls.
-- Provides a ready-made Lovelace dashboard with inline override dropdowns.
+- Provides a ready-made two-tab Lovelace dashboard: a read-only Plan view and an interactive Settings view with slot override controls.
 
 ---
 
@@ -175,25 +175,18 @@ This repository includes a ready-made Lovelace dashboard:
 dashboards/battery-solar-optimiser-dashboard.yaml
 ```
 
-It shows:
+It has two views:
 
-- a full-width heading
-- projected battery graph
-- forecast graph for Agile price, PV, predicted load, battery charge/discharge power, and cumulative cost
-- previous-24-hours actuals graph for house load, PV power, battery power, and import cost
-- a wide 24-hour plan table
-- inline per-slot override dropdowns
-- status and freshness information
-- live tuning controls for minimum reserve, discharge aggressiveness, battery charge rate, and house-load averaging
-- totals
-- optimiser history
+- **Plan** — projected battery graph, forecast graph, previous-24-hours actuals, and a read-only 24-hour plan table. Forced slots are highlighted, but this page intentionally has no override dropdowns so it stays calm while graphs update.
+- **Settings** — the same 24-hour plan table with per-slot override dropdowns, live tuning controls, source-entity reference rows, and totals.
 
-The dashboard uses two small local custom cards from this repository:
+The dashboard uses one local custom-card resource from this repository:
 
 ```text
 www/bso-plan-card.js
-www/bso-layout-card.js
 ```
+
+That file defines both `custom:bso-plan-card` and the internal `custom:bso-responsive-stack` helper. The responsive helper stacks columns vertically on phones and shows two columns on wider screens; it does **not** need a separate Lovelace resource entry.
 
 ### Dashboard installation
 
@@ -203,24 +196,21 @@ www/bso-layout-card.js
    /config/dashboards/battery-solar-optimiser-dashboard.yaml
    ```
 
-2. Copy the custom card JavaScript files into Home Assistant's `www` folder:
+2. Copy the custom card JavaScript file into Home Assistant's `www` folder:
 
    ```text
    /config/www/bso-plan-card.js
-   /config/www/bso-layout-card.js
    ```
 
-3. Register the custom card resources in `configuration.yaml`.
+3. Register the custom card resource in `configuration.yaml`.
 
-   If your Home Assistant uses YAML-mode Lovelace, add them under the global `lovelace.resources` section:
+   If your Home Assistant uses YAML-mode Lovelace, add it under the global `lovelace.resources` section:
 
    ```yaml
    lovelace:
      resource_mode: yaml
      resources:
        - url: /local/bso-plan-card.js
-         type: module
-       - url: /local/bso-layout-card.js
          type: module
      dashboards:
        battery-solar-optimiser:
@@ -351,14 +341,13 @@ It is not a mathematical optimiser and does not use an LP/MILP solver. That is d
 
 ### The dashboard shows a red custom card configuration error
 
-Check that both JS files are available:
+Check that the custom card file is available:
 
 ```text
 /local/bso-plan-card.js
-/local/bso-layout-card.js
 ```
 
-Then check they are registered under global Lovelace resources in `configuration.yaml`, not only inside an individual dashboard YAML file.
+Then check it is registered under global Lovelace resources in `configuration.yaml`, not only inside an individual dashboard YAML file. `bso-plan-card.js` also defines the responsive helper used by the dashboard, so no separate responsive-stack resource is required.
 
 Restart Home Assistant and hard-refresh your browser.
 
@@ -374,7 +363,7 @@ Check the neighbouring future slots and the `number.battery_solar_optimiser_batt
 
 Make sure `/local/bso-plan-card.js` is the latest version and hard-refresh the browser. The card avoids re-rendering while a native override select is open, and overrides are tied to absolute slot start times so expired overrides are removed as the plan rolls forward.
 
-If the override dropdown still flashes closed briefly, the card may be re-rendering before the select reports focus. A hard-refresh should pick up the latest version; the current card sets an interaction flag on focus/mousedown and only re-renders after blur. Interactive control changes also wait 30 seconds before recalculating, so rapid changes (including multiple overrides) coalesce into one refresh.
+If the override dropdown still flashes closed briefly, hard-refresh the browser to pick up the latest card. The current card suppresses plan-table re-rendering for a short interaction window on focus, mouse, and touch events; interactive control changes also wait 30 seconds before recalculating, so rapid changes coalesce into one refresh.
 
 ### The battery does not discharge as much as expected
 
@@ -416,7 +405,6 @@ Run tests:
 python3 -m pytest tests/ -v
 python3 -m compileall custom_components/battery_solar_optimiser
 node --check www/bso-plan-card.js
-node --check www/bso-layout-card.js
 ```
 
 ---

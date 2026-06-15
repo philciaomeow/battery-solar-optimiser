@@ -8,6 +8,8 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
     };
     this.attachShadow({ mode: 'open' });
     this._selectOpen = false;
+    this._suppressRenderUntil = 0;
+    this._suppressedRenderTimer = null;
   }
 
   set hass(hass) {
@@ -15,16 +17,44 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
     // Lovelace pushes frequent hass updates. Re-rendering while a native select
     // menu is open closes the dropdown immediately, making overrides almost
     // impossible to choose. Defer the render until interaction finishes.
-    if (this._anySelectOpen()) return;
+    if (this._shouldSuppressRender()) {
+      this._scheduleRenderAfterSuppression();
+      return;
+    }
     this.render();
   }
 
-  _anySelectOpen() {
+  _escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>'"]/g, (char) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      "'": '&#39;',
+      '"': '&quot;',
+    }[char]));
+  }
+
+  _markSelectInteraction(ms = 15000, extend = true) {
+    this._selectOpen = true;
+    const until = Date.now() + ms;
+    this._suppressRenderUntil = extend ? Math.max(this._suppressRenderUntil || 0, until) : until;
+  }
+
+  _scheduleRenderAfterSuppression() {
+    if (this._suppressedRenderTimer) clearTimeout(this._suppressedRenderTimer);
+    const delay = Math.max(50, (this._suppressRenderUntil || 0) - Date.now() + 50);
+    this._suppressedRenderTimer = setTimeout(() => {
+      this._suppressedRenderTimer = null;
+      this._selectOpen = false;
+      if (!this._shouldSuppressRender()) this.render();
+    }, delay);
+  }
+
+  _shouldSuppressRender() {
+    if (Date.now() < (this._suppressRenderUntil || 0)) return true;
     if (!this.shadowRoot) return false;
     const active = this.shadowRoot.activeElement;
     if (active && active.tagName === 'SELECT') return true;
-    // Mobile browsers don't always keep select focused, so also consider our
-    // own interaction flag set on focus/mousedown.
     return this._selectOpen;
   }
 
@@ -73,6 +103,9 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
       const override = this._slotOverrideState(index, slot);
       const rowClass = `${slot.is_current ? 'current' : ''} ${this._overrideClass(override)}`.trim();
       const selected = (option) => override === option ? 'selected' : '';
+      const escapedTime = this._escapeHtml(slot.start_local ?? '');
+      const escapedAction = this._escapeHtml(slot.action ?? 'unknown');
+      const escapedOverride = this._escapeHtml(override);
       const overrideCell = this.config.show_overrides ? `
           <td class="override-cell">
             <select data-slot="${index}" aria-label="Override slot ${index}">
@@ -80,12 +113,12 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
               <option value="Force charge" ${selected('Force charge')}>Force charge</option>
               <option value="Force discharge" ${selected('Force discharge')}>Force discharge</option>
             </select>
-          </td>` : `<td class="override-badge">${override === 'No change' ? '' : `<span class="badge ${this._overrideClass(override)}">${override}</span>`}</td>`;
+          </td>` : `<td class="override-badge">${override === 'No change' ? '' : `<span class="badge ${this._overrideClass(override)}">${escapedOverride}</span>`}</td>`;
       return `
         <tr class="${rowClass}">
-          <td class="time"><strong>${slot.start_local ?? ''}</strong></td>
+          <td class="time"><strong>${escapedTime}</strong></td>
           ${overrideCell}
-          <td><span class="badge ${this._statusClass(slot.action)}">${slot.action ?? 'unknown'}</span></td>
+          <td><span class="badge ${this._statusClass(slot.action)}">${escapedAction}</span></td>
           <td>${Number(slot.price ?? 0).toFixed(1)}p</td>
           <td>${Number(slot.battery_percent ?? 0).toFixed(0)}%</td>
           <td>${Number(slot.solar_kwh ?? 0).toFixed(2)}</td>
@@ -95,7 +128,7 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
     }).join('');
 
     this.shadowRoot.innerHTML = `
-      <ha-card header="${this.config.title}">
+      <ha-card header="${this._escapeHtml(this.config.title)}">
         <style>
           :host { display: block; }
           .wrap { overflow-x: auto; padding: 0 12px 12px; }
@@ -110,6 +143,8 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
           .badge.charge { background: #064e3b; color: #34d399; }
           .badge.discharge { background: #7f1d1d; color: #f87171; }
           .badge.hold { background: #374151; color: #d1d5db; }
+          .badge.forced-charge { background: #065f46; color: #6ee7b7; }
+          .badge.forced-discharge { background: #991b1b; color: #fecaca; }
           select {
             max-width: 132px;
             min-width: 116px;
@@ -148,25 +183,34 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
 
     if (this.config.show_overrides) {
       this.shadowRoot.querySelectorAll('select[data-slot]').forEach((select) => {
-        select.addEventListener('focus', () => { this._selectOpen = true; });
-        select.addEventListener('blur', () => { this._selectOpen = false; this.render(); });
-        select.addEventListener('mousedown', () => { this._selectOpen = true; });
-        select.addEventListener('change', (event) => {
+        select.addEventListener('focus', () => { this._markSelectInteraction(); });
+        select.addEventListener('mousedown', () => { this._markSelectInteraction(); });
+        select.addEventListener('touchstart', () => { this._markSelectInteraction(); }, { passive: true });
+        select.addEventListener('blur', () => {
+          // Mobile native pickers can blur while the picker is still opening, so
+          // do not render here. Let the suppression timer expire naturally.
           this._selectOpen = false;
+          this._scheduleRenderAfterSuppression();
+        });
+        select.addEventListener('change', (event) => {
+          this._markSelectInteraction(3000, false);
           this._changeOverride(Number(event.target.dataset.slot), event.target.value);
+          this._scheduleRenderAfterSuppression();
         });
       });
     }
   }
 }
 
-customElements.define('bso-plan-card', BatterySolarOptimiserPlanCard);
+if (!customElements.get('bso-plan-card')) customElements.define('bso-plan-card', BatterySolarOptimiserPlanCard);
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: 'bso-plan-card',
-  name: 'Battery Solar Optimiser Plan Card',
-  description: '24 hour battery plan with inline override controls',
-});
+if (!window.customCards.some((card) => card.type === 'bso-plan-card')) {
+  window.customCards.push({
+    type: 'bso-plan-card',
+    name: 'Battery Solar Optimiser Plan Card',
+    description: '24 hour battery plan with inline override controls',
+  });
+}
 
 class BSOResponsiveStack extends HTMLElement {
   setConfig(config) {
@@ -203,6 +247,8 @@ class BSOResponsiveStack extends HTMLElement {
     });
   }
 }
-customElements.define("bso-responsive-stack", BSOResponsiveStack);
+if (!customElements.get("bso-responsive-stack")) customElements.define("bso-responsive-stack", BSOResponsiveStack);
 window.customCards = window.customCards || [];
-window.customCards.push({type: "bso-responsive-stack", name: "BSO Responsive 2-column Stack", description: "Stacks children vertically on narrow screens, side by side on desktop."});
+if (!window.customCards.some((card) => card.type === "bso-responsive-stack")) {
+  window.customCards.push({type: "bso-responsive-stack", name: "BSO Responsive 2-column Stack", description: "Stacks children vertically on narrow screens, side by side on desktop."});
+}
