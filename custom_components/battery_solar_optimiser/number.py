@@ -14,6 +14,7 @@ from .sensor import BatterySolarOptimiserCoordinator
 
 CONTROL_MIN_RESERVE_PERCENT = "min_reserve_percent"
 CONTROL_DISCHARGE_AGGRESSIVENESS = "discharge_aggressiveness"
+CONTROL_CHARGE_RATE_KW = "charge_rate_kw"
 CONTROL_MANUAL_HOUSE_LOAD_W = "manual_house_load_w"
 
 
@@ -27,6 +28,7 @@ async def async_setup_entry(
     entities = [
         BatterySolarOptimiserMinReserveNumber(coordinator),
         BatterySolarOptimiserDischargeAggressivenessNumber(coordinator),
+        BatterySolarOptimiserChargeRateNumber(coordinator),
         BatterySolarOptimiserManualHouseLoadNumber(coordinator),
     ]
     coordinator.entities.extend(entities)
@@ -119,6 +121,30 @@ class BatterySolarOptimiserDischargeAggressivenessNumber(BatterySolarOptimiserBa
     def __init__(self, coordinator: BatterySolarOptimiserCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_discharge_aggressiveness"
+
+
+class BatterySolarOptimiserChargeRateNumber(BatterySolarOptimiserBaseNumber):
+    """Maximum grid charge rate used by the optimiser plan."""
+
+    control_key = CONTROL_CHARGE_RATE_KW
+    description = "Maximum battery charge rate the optimiser should plan with. Lower this if the inverter is not charging as quickly as configured."
+    _attr_name = "Battery Charge Rate"
+    _attr_icon = "mdi:battery-arrow-up"
+    _attr_device_class = NumberDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_native_min_value = 0.1
+    _attr_native_max_value = 7.0
+    _attr_native_step = 0.1
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, coordinator: BatterySolarOptimiserCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_charge_rate_kw"
+        self.recommended_value = float(coordinator.cfg.get("max_charge_kw", 3.7))
+
+    @property
+    def recommended_display(self) -> str:
+        return f"{self.recommended_value:g} kW"
 
 
 class BatterySolarOptimiserManualHouseLoadNumber(BatterySolarOptimiserBaseNumber):

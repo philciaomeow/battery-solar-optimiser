@@ -169,7 +169,7 @@ def test_first_expensive_slot_is_discharged():
     assert plan.slots[7].action == "discharge"
 
 
-def test_full_battery_pre_peak_slots_stay_in_charge_mode():
+def test_full_battery_pre_peak_slots_report_hold_until_discharge():
     now = datetime(2026, 6, 14, 12, 30, tzinfo=timezone.utc)
     pence = [12.684, 13.755, 13.503, 13.923, 14.543, 14.553, 15.729, 33.484, 33.999]
     rates = [(now + timedelta(minutes=30 * i), p / 100.0) for i, p in enumerate(pence)]
@@ -187,8 +187,8 @@ def test_full_battery_pre_peak_slots_stay_in_charge_mode():
         efficiency=0.95,
         missing_rate_pence=30.0,
     )
-    assert any(slot.action == "charge" for slot in plan.slots[:7])
-    assert all(slot.action in ("charge", "discharge") for slot in plan.slots[:9])
+    assert all(slot.action == "hold" for slot in plan.slots[:7])
+    assert plan.slots[7].action == "discharge"
 
 
 def test_missing_future_rates_use_previous_day_same_slot_before_fixed_fallback():
@@ -265,7 +265,8 @@ def test_negative_slots_after_peak_recharge_battery():
     )
     negative_slots = [slot for slot in plan.slots if slot.price < 0]
     assert negative_slots
-    assert all(slot.action == "charge" for slot in negative_slots)
+    assert any(slot.action == "charge" for slot in negative_slots)
+    assert all(slot.action in ("charge", "hold") for slot in negative_slots)
     post_peak_soc = min(plan.projected_soc[1:9])
     later_soc = max(plan.projected_soc[9:15])
     assert later_soc > post_peak_soc
@@ -329,3 +330,51 @@ def test_discharge_aggressiveness_increases_discharge_slots():
     conservative_count = sum(slot.action == "discharge" for slot in conservative.slots)
     aggressive_count = sum(slot.action == "discharge" for slot in aggressive.slots)
     assert aggressive_count >= conservative_count
+
+
+
+def test_precharge_waits_for_cheaper_upcoming_slots():
+    now = datetime(2026, 6, 15, 23, 30, tzinfo=timezone.utc)
+    pence = [19.2, 19.3, 16.4, 16.6, 17.1, 23.0, 24.0, 25.0]
+    rates = [(now + timedelta(minutes=30 * i), p / 100.0) for i, p in enumerate(pence)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=1.0,
+        current_soc_kwh=2.0,
+        load_w=500,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        discharge_aggressiveness=100,
+    )
+
+    assert plan.slots[0].action == "hold"
+    assert plan.slots[1].action == "hold"
+    assert plan.slots[2].action == "charge"
+
+
+def test_full_battery_reports_hold_not_zero_kw_charge():
+    now = datetime(2026, 6, 15, 0, 0, tzinfo=timezone.utc)
+    rates = [(now + timedelta(minutes=30 * i), 0.10 if i < 4 else 0.30) for i in range(48)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=1.0,
+        current_soc_kwh=5.0,
+        load_w=500,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+    )
+
+    assert plan.slots[0].action == "hold"
+    assert plan.slots[0].action_kw == 0.0

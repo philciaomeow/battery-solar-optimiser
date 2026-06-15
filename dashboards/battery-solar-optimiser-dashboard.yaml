@@ -100,6 +100,8 @@ views:
               name: Minimum reserve — recommended 20%
             - entity: number.battery_solar_optimiser_discharge_aggressiveness
               name: Discharge aggressiveness — recommended 60%
+            - entity: number.battery_solar_optimiser_battery_charge_rate
+              name: Battery charge rate
             - type: section
               label: House load averaging
             - entity: switch.battery_solar_optimiser_use_average_house_load

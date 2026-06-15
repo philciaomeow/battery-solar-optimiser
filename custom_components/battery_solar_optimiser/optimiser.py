@@ -183,6 +183,7 @@ def build_plan(
         net_load = load_per_slot - slot.solar_kwh
         future_prices = [slots[j].price for j in range(i + 1, min(i + 16, len(slots)))]
         max_future_price = max(future_prices) if future_prices else slot.price
+        min_future_price = min(future_prices) if future_prices else slot.price
         avg_future_price = sum(future_prices) / len(future_prices) if future_prices else slot.price
 
         action = "hold"
@@ -201,10 +202,12 @@ def build_plan(
             is_forced = True
         elif arbitrage_enabled and future_expensive and current_is_discounted and slot.price < expensive_threshold:
             # Charge/prepare before later expensive slots if the spread beats
-            # round-trip loss. If already full, keep charge as a "stay ready"
-            # signal rather than downgrading to hold.
+            # round-trip loss, but do not start charging at a merely okay price
+            # when clearly cheaper slots are still available before the next
+            # expensive block.
             profitable_future = max_future_price > (slot.price / max(efficiency, 0.01)) + 2.0
-            if profitable_future:
+            near_best_upcoming_price = slot.price <= min_future_price + 0.5
+            if profitable_future and near_best_upcoming_price:
                 action = "charge"
                 is_forced = True
         elif arbitrage_enabled and slot.price >= expensive_threshold and soc > min_soc_kwh + 0.05:
@@ -258,9 +261,11 @@ def build_plan(
                 soc += charge
                 action_kw = charge / slot_duration_h
                 slot_import += charge / max(efficiency, 0.01)
-            # If the battery is already full, keep the action as charge with
-            # 0 kW so the plan/inverter stays in ready-to-charge mode before
-            # the expensive block.
+            # If the battery is already full, report hold rather than a 0 kW
+            # charge. Otherwise the dashboard appears to tell the inverter to
+            # charge at higher/normal prices when there is no useful capacity.
+            if charge <= 0.001 and net_load > 0:
+                action = "hold"
             slot_import += max(0, net_load)
             slot_export += max(0, -net_load)
 
