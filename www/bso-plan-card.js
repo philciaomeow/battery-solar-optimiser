@@ -10,6 +10,7 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
     this._selectOpen = false;
     this._suppressRenderUntil = 0;
     this._suppressedRenderTimer = null;
+    this._pendingOverrides = {};
   }
 
   set hass(hass) {
@@ -79,6 +80,9 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
   }
 
   _slotOverrideState(index, slot) {
+    if (Object.prototype.hasOwnProperty.call(this._pendingOverrides || {}, index)) {
+      return this._pendingOverrides[index];
+    }
     const entityId = this._overrideEntity(index);
     const state = this._hass.states[entityId]?.state;
     if (state) return state;
@@ -89,10 +93,22 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
 
   _changeOverride(index, value) {
     const entityId = this._overrideEntity(index);
+    this._pendingOverrides[index] = value;
+    this.render();
     this._hass.callService('select', 'select_option', {
       entity_id: entityId,
       option: value,
+    }).catch(() => {
+      delete this._pendingOverrides[index];
+      this.render();
     });
+    setTimeout(() => {
+      const current = this._hass?.states?.[entityId]?.state;
+      if (!current || current === value) {
+        delete this._pendingOverrides[index];
+        this.render();
+      }
+    }, 1500);
   }
 
   render() {

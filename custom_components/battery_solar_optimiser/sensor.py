@@ -446,17 +446,18 @@ class BatterySolarOptimiserCoordinator:
     def _next_scheduled_refresh(self, now: datetime, low_soc: bool = False) -> datetime:
         """Return the next expected refresh time.
 
-        Normal refreshes run at :25 and :55. While battery SOC is below the
-        configured minimum, the low-SOC guard checks every five minutes.
+        Normal recalculations run at the Agile slot boundary and 15 minutes
+        before each boundary. While battery SOC is below the configured minimum,
+        the low-SOC guard checks every five minutes.
         """
         candidates = []
         for hour_offset in range(3):
             base = now + timedelta(hours=hour_offset)
-            for minute in (25, 55):
+            for minute in (0, 15, 30, 45):
                 candidate = base.replace(minute=minute, second=0, microsecond=0)
                 if candidate > now:
                     candidates.append(candidate)
-        next_due = min(candidates) if candidates else now + timedelta(minutes=30)
+        next_due = min(candidates) if candidates else now + timedelta(minutes=15)
         if low_soc:
             next_due = min(next_due, now + timedelta(minutes=5))
         return next_due
@@ -722,7 +723,7 @@ class BatterySolarOptimiserCoordinator:
                 async_track_time_change(
                     self.hass,
                     self.async_refresh,
-                    minute=[25, 55],
+                    minute=[0, 15, 30, 45],
                     second=0,
                 )
             )
