@@ -3,10 +3,11 @@
 Battery Solar Optimiser is a lightweight Home Assistant custom integration for planning simple battery charge, discharge, and hold windows from:
 
 - Octopus Agile import prices
-- optional previous-day Agile prices for unpublished future slots
+- current-day and next-day Octopus Agile import prices, refreshed before each plan
+- optional previous-day Agile prices for rare unpublished/fallback slots
 - solar forecast / PV estimate
 - current battery state of charge
-- configurable household load
+- calculated or manually configured household load
 - battery capacity, charge/discharge limits, efficiency, and minimum reserve
 
 It is designed for people who want something simpler and easier to reason about than a full battery optimiser. It does **not** directly control your inverter. Instead, it exposes Home Assistant entities that you can use in your own automations.
@@ -22,11 +23,15 @@ It is designed for people who want something simpler and easier to reason about 
   - `charging`
   - `discharging`
   - `hold`
-- Uses actual Octopus Agile rates when available.
+- Refreshes Octopus Agile current-day, next-day, and previous-day rate entities before every optimiser run.
+- Uses actual Octopus Agile current-day and next-day rates when available.
 - Uses previous-day same-slot Agile prices when future Agile slots are unpublished.
 - Falls back to a configurable pessimistic missing-rate price when no tariff data exists.
 - Includes recent historical price context so flat-looking prices after cheap periods are not treated as automatically cheap.
 - Handles negative Agile prices and will recharge during cheap/negative post-peak periods when there is battery capacity available.
+- Uses self-use discharge planning: battery discharge is limited to household demand and does not intentionally export energy.
+- Calculates average house load from recent Home Assistant recorder history, with selectable 24/48/72 hour windows and a manual fallback.
+- Exposes live tuning controls for minimum reserve, discharge aggressiveness, battery charge rate, and house-load averaging.
 - Reads battery SOC as either `%` or `kWh`.
 - Protects a configurable minimum SOC.
 - Refreshes shortly before Agile slot changes.
@@ -46,7 +51,14 @@ It is designed for people who want something simpler and easier to reason about 
 | `sensor.battery_solar_optimiser_status` | Sensor | `idle` or `running`. Useful to see if the optimiser is recalculating. |
 | `sensor.battery_solar_optimiser_last_updated` | Timestamp sensor | Last successful plan refresh. |
 | `sensor.battery_solar_optimiser_next_update_due` | Timestamp sensor | Next scheduled optimiser refresh. |
+| `sensor.battery_solar_optimiser_average_house_load` | Sensor | Calculated/effective average house load used for planning. |
 | `select.battery_solar_optimiser_action` | Select | Current effective action: `charging`, `discharging`, or `hold`. Use this in inverter automations. |
+| `select.battery_solar_optimiser_house_load_average_period` | Select | Selects how much history to use for house-load averaging: 24, 48, or 72 hours. |
+| `switch.battery_solar_optimiser_use_average_house_load` | Switch | Enables calculated house-load averaging. When off, the manual load value is used. |
+| `number.battery_solar_optimiser_minimum_reserve` | Number | Live minimum reserve percentage. |
+| `number.battery_solar_optimiser_discharge_aggressiveness` | Number | Live tuning for how readily the optimiser discharges during moderately high prices. |
+| `number.battery_solar_optimiser_battery_charge_rate` | Number | Live maximum battery charge rate in kW used by the plan. |
+| `number.battery_solar_optimiser_manual_house_load` | Number | Manual house-load fallback in watts. |
 | `button.battery_solar_optimiser_recalculate` | Button | Manually refreshes the plan immediately. |
 
 ### Slot override entities
@@ -126,16 +138,18 @@ Settings → Devices & services → Battery Solar Optimiser → Configure
 | Setting | What to choose |
 | --- | --- |
 | Agile price entity | Octopus Energy current-day Agile rates entity. It should expose a `rates` attribute with start times and `value_inc_vat`. |
+| Next-day rates entity | Optional but recommended. Used for the second half of the 24-hour rolling plan when the plan crosses midnight. If left blank, the integration tries to infer it from the current-day entity name. |
 | Previous-day rates entity | Optional but recommended. Used for unpublished future Agile slots. If left blank, the integration tries to infer it from the current-day entity name. |
 | Solar forecast entity | Forecast.Solar / Solcast-style entity with forecast attributes, or a Forecast.Solar power/energy sensor such as `sensor.power_production_now`. W/kW power sensors are converted to kWh per 30-minute slot. If unavailable, the integration uses a simple PV-capacity fallback estimate. |
 | Battery SOC entity | Battery state of charge. Can be `%` or `kWh`. If unavailable, the optimiser falls back safely to minimum SOC. |
 | Battery capacity | Usable battery capacity in kWh. |
+| Load power entity | Optional live house-load power sensor in W or kW, e.g. `sensor.solax_house_load`. Used for calculated average house load. |
 | Minimum SOC | Reserve in kWh. The optimiser will not intentionally discharge below this. |
 | PV capacity | Installed PV size / fallback solar estimate basis. |
 | Max charge power | Maximum grid/battery charge power in kW. |
 | Max discharge power | Maximum battery discharge power in kW. |
 | Round-trip efficiency | Battery efficiency, usually around `0.90`–`0.95`. |
-| Hourly load | Approximate average home load in watts. |
+| Hourly load | Manual average home load in watts. Used as a fallback when calculated averaging is disabled or recorder history is unavailable. |
 | Display timezone | Timezone for dashboard slot labels, e.g. `Europe/London`. |
 | Missing-rate fallback | Pence/kWh used when no actual or previous-day rate is available. Defaults to `30p/kWh` to avoid treating unknown slots as free. |
 | Lookback hours | Recent historical price context window. Defaults to 12 hours. |
@@ -169,6 +183,7 @@ It shows:
 - a wide 24-hour plan table
 - inline per-slot override dropdowns
 - status and freshness information
+- live tuning controls for minimum reserve, discharge aggressiveness, battery charge rate, and house-load averaging
 - totals
 - optimiser history
 
@@ -322,8 +337,10 @@ The core optimiser is intentionally simple and deterministic:
 6. Charge during cheap slots, especially before expensive periods or during negative prices.
 7. Discharge during expensive slots when there is usable battery above reserve.
 8. Hold during normal/flat periods to avoid needless battery cycling.
-9. Apply any manual slot overrides.
-10. Simulate projected SOC and cost from the resulting actions.
+9. Prefer the cheapest upcoming slots for grid charging rather than charging early at merely average rates.
+10. Limit planned discharge to predicted household demand in self-use mode; it does not intentionally export battery energy.
+11. Apply any manual slot overrides.
+12. Simulate projected SOC and cost from the resulting actions.
 
 It is not a mathematical optimiser and does not use an LP/MILP solver. That is deliberate: the aim is a transparent, dependency-light controller that is easy to understand and debug.
 
@@ -346,7 +363,22 @@ Restart Home Assistant and hard-refresh your browser.
 
 ### The plan has fallback prices
 
-The plan attributes include price source counts. If many slots use fallback, check your Octopus current-day and previous-day rates entities.
+The plan attributes include price source counts. If many slots use fallback, check your Octopus current-day, next-day, and previous-day rates entities. The optimiser asks Home Assistant to refresh those entities before each recalculation, but it can only use data exposed by the Octopus integration.
+
+### The plan charges on a rate that looks too high
+
+Check the neighbouring future slots and the `number.battery_solar_optimiser_battery_charge_rate` value. The optimiser now prefers the cheapest upcoming charge slots and reports `hold` when the battery is already full rather than showing a misleading zero-power charge. If the physical inverter charges slower than the configured value, lower the battery charge-rate number so the plan allocates enough cheap slots to finish charging.
+
+### The battery does not discharge as much as expected
+
+The optimiser does not plan export. In self-use mode, discharge is limited by predicted house load. Check:
+
+- `sensor.battery_solar_optimiser_average_house_load`
+- `switch.battery_solar_optimiser_use_average_house_load`
+- `select.battery_solar_optimiser_house_load_average_period`
+- `number.battery_solar_optimiser_manual_house_load`
+
+If recent history is not representative, either change the averaging period or turn off calculated averaging and set the manual house-load fallback.
 
 ### The battery SOC looks wrong
 
@@ -385,8 +417,8 @@ node --check www/bso-layout-card.js
 ## Current limitations
 
 - No direct inverter control built in yet.
-- No export/sell-back optimisation yet.
-- Load is a fixed average value, not a learned household profile.
+- No export/sell-back optimisation. This is deliberate for self-use/no-export-tariff setups.
+- Load is averaged from recent history or a manual fallback, not a detailed time-of-day household profile.
 - Solar forecast parsing is intentionally basic and may need tuning for different forecast integrations.
 - Slot overrides are relative to the current rolling 24-hour plan, not pinned to absolute calendar times.
 
@@ -395,8 +427,8 @@ node --check www/bso-layout-card.js
 ## Roadmap ideas
 
 - Optional direct inverter service mappings.
-- Export-price / sell-back optimisation.
-- Time-varying load profiles.
+- Optional export-price / sell-back optimisation for users with a real export tariff.
+- Time-varying load profiles beyond the current 24/48/72h average.
 - Better solar forecast source adapters.
 - Absolute-time manual overrides.
 - HACS-ready screenshots and richer documentation.
