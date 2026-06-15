@@ -10,6 +10,11 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    // Lovelace pushes frequent hass updates. Re-rendering while a native select
+    // menu is open closes the dropdown immediately, making overrides almost
+    // impossible to choose. Defer the render until the select loses focus.
+    const active = this.shadowRoot?.activeElement;
+    if (active?.tagName === 'SELECT') return;
     this.render();
   }
 
@@ -132,6 +137,7 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
       select.addEventListener('change', (event) => {
         this._changeOverride(Number(event.target.dataset.slot), event.target.value);
       });
+      select.addEventListener('blur', () => this.render());
     });
   }
 }

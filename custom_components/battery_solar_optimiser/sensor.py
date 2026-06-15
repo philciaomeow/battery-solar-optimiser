@@ -58,6 +58,13 @@ def _to_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def _align_to_half_hour(value: datetime) -> datetime:
+    """Round a datetime down to the current half-hour boundary."""
+    if value.minute < 30:
+        return value.replace(minute=0, second=0, microsecond=0)
+    return value.replace(minute=30, second=0, microsecond=0)
+
+
 def _local_time(value: datetime, time_zone: str = "Europe/London") -> str:
     """Format a datetime in the configured display timezone."""
     try:
@@ -198,49 +205,99 @@ def _energy_state_to_half_hour_kwh(state) -> float | None:
     return None
 
 
-def _solar_from_power_sensors(state_api, solar_entity: str, now: datetime) -> list[tuple[datetime, float]]:
-    """Build a short solar forecast from Forecast.Solar power/energy sensors.
+def _energy_state_kwh(state) -> float | None:
+    """Convert a total energy sensor state to kWh."""
+    value = _state_float(state)
+    if value is None:
+        return None
+    uom = str(state.attributes.get("unit_of_measurement", "")).lower()
+    if uom == "kwh":
+        return max(0.0, value)
+    if uom == "wh":
+        return max(0.0, value / 1000.0)
+    return None
 
-    Forecast.Solar often exposes sensors such as ``power_production_now`` and
-    ``power_production_next_hour`` rather than a detailed forecast attribute.
-    Convert those W/kW readings into kWh per 30-minute slot before falling back
-    to the generic bell curve.
+
+def _solar_from_power_sensors(state_api, solar_entity: str, now: datetime) -> list[tuple[datetime, float]]:
+    """Build a 48-slot solar forecast from Forecast.Solar-style sensors.
+
+    Forecast.Solar exposes power sensors for now/next hour and energy sensors
+    such as ``energy_production_today_remaining`` and
+    ``energy_production_tomorrow``. The energy sensors are totals, not per-hour
+    readings, so distribute them across daylight half-hour slots instead of
+    dividing by two. That keeps the dashboard forecast in the same order of
+    magnitude as the daily kWh forecast.
     """
     selected = state_api.get(solar_entity)
     current_slot = _power_state_to_slot_kwh(selected) or _energy_state_to_half_hour_kwh(selected)
 
-    # Forecast.Solar's common entity IDs are stable enough to infer siblings
-    # from a selected ``sensor.power_production_now`` entity.
     next_hour = None
     current_hour_energy = None
     next_hour_energy = None
+    today_remaining = None
+    tomorrow_total = None
     if solar_entity.endswith("power_production_now"):
         prefix = solar_entity[: -len("power_production_now")]
         next_hour = _power_state_to_slot_kwh(state_api.get(f"{prefix}power_production_next_hour"))
         current_hour_energy = _energy_state_to_half_hour_kwh(state_api.get(f"{prefix}energy_current_hour"))
         next_hour_energy = _energy_state_to_half_hour_kwh(state_api.get(f"{prefix}energy_next_hour"))
+        today_remaining = _energy_state_kwh(state_api.get(f"{prefix}energy_production_today_remaining"))
+        tomorrow_total = _energy_state_kwh(state_api.get(f"{prefix}energy_production_tomorrow"))
 
     if current_hour_energy is not None:
         current_slot = current_hour_energy
     if next_hour_energy is not None:
         next_hour = next_hour_energy
 
-    if current_slot is None and next_hour is None:
+    if current_slot is None and next_hour is None and today_remaining is None and tomorrow_total is None:
         return []
 
-    base = now.replace(minute=0, second=0, microsecond=0)
-    slots = []
-    for i in range(48):
-        slot_start = base + timedelta(minutes=30 * i)
-        if i < 2 and current_slot is not None:
-            val = current_slot
-        elif i < 4 and next_hour is not None:
-            val = next_hour
-        else:
-            val = 0.0
-        slots.append((slot_start, val))
-    return slots
+    base = _align_to_half_hour(now)
+    slots = [(base + timedelta(minutes=30 * i), 0.0) for i in range(48)]
 
+    # Seed near-term power/energy where Forecast.Solar provides it.
+    for i, (slot_start, val) in enumerate(slots):
+        if i < 2 and current_slot is not None:
+            slots[i] = (slot_start, current_slot)
+        elif i < 4 and next_hour is not None:
+            slots[i] = (slot_start, next_hour)
+
+    try:
+        local_tz = ZoneInfo("Europe/London")
+    except ZoneInfoNotFoundError:  # pragma: no cover - tzdata should exist in HA
+        local_tz = timezone.utc
+    now_local = now.astimezone(local_tz)
+
+    def _daylight_weight(slot_start: datetime) -> float:
+        hour = slot_start.astimezone(local_tz).hour + slot_start.astimezone(local_tz).minute / 60.0
+        sunrise = 5.0
+        sunset = 21.5
+        peak = 13.0
+        if hour < sunrise or hour > sunset:
+            return 0.0
+        return max(0.05, 1.0 - abs(hour - peak) / ((sunset - sunrise) / 2.0))
+
+    def _distribute(total_kwh: float | None, target_date) -> None:
+        if total_kwh is None or total_kwh <= 0:
+            return
+        indexes = [
+            i for i, (slot_start, _val) in enumerate(slots)
+            if slot_start.astimezone(local_tz).date() == target_date and slot_start >= now
+        ]
+        weights = [_daylight_weight(slots[i][0]) for i in indexes]
+        weight_total = sum(weights)
+        if weight_total <= 0:
+            return
+        for i, weight in zip(indexes, weights, strict=False):
+            slot_start, existing = slots[i]
+            distributed = total_kwh * (weight / weight_total)
+            # Keep explicit near-term readings if they are higher, otherwise the
+            # total-energy distribution provides the broader daily shape.
+            slots[i] = (slot_start, max(existing, distributed))
+
+    _distribute(today_remaining, now_local.date())
+    _distribute(tomorrow_total, now_local.date() + timedelta(days=1))
+    return slots
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -309,18 +366,44 @@ class BatterySolarOptimiserCoordinator:
             if entity.hass:
                 entity.async_write_ha_state()
 
+    def _slot_override_key(self, slot_index: int) -> str | None:
+        """Return the absolute start-time key for a visible relative slot."""
+        if not self.plan or slot_index >= len(self.plan.slots):
+            return None
+        return self.plan.slots[slot_index].start.isoformat()
+
     def set_slot_override(self, slot_index: int, action: str | None) -> None:
-        """Store an override for a relative plan slot."""
+        """Store an override for the absolute time represented by a relative slot."""
+        key = self._slot_override_key(slot_index)
+        if key is None:
+            return
         overrides = dict(self.data.get("slot_overrides", {}))
         if action in ("charge", "discharge"):
-            overrides[slot_index] = action
+            overrides[key] = action
         else:
-            overrides.pop(slot_index, None)
+            overrides.pop(key, None)
         self.data["slot_overrides"] = overrides
 
     def get_slot_override(self, slot_index: int) -> str | None:
         """Return the internal override action for a relative plan slot."""
-        return dict(self.data.get("slot_overrides", {})).get(slot_index)
+        key = self._slot_override_key(slot_index)
+        if key is None:
+            return None
+        return dict(self.data.get("slot_overrides", {})).get(key)
+
+    def slot_overrides_for_starts(self, starts: list[datetime]) -> dict[int, str]:
+        """Return relative-index overrides for a new rolling plan and prune old ones."""
+        overrides = dict(self.data.get("slot_overrides", {}))
+        start_keys = {slot_start.isoformat(): idx for idx, slot_start in enumerate(starts)}
+        active: dict[int, str] = {}
+        pruned: dict[str, str] = {}
+        for key, action in overrides.items():
+            if key in start_keys and action in ("charge", "discharge"):
+                active[start_keys[key]] = action
+                pruned[key] = action
+        if pruned != overrides:
+            self.data["slot_overrides"] = pruned
+        return active
 
     def set_control_value(self, key: str, value: float) -> None:
         """Store a live tuning control value."""
@@ -563,12 +646,7 @@ class BatterySolarOptimiserCoordinator:
                 heuristic = _solar_heuristic(refresh_started, float(cfg.get("pv_capacity_kwh", 5.0)))
                 power_sensor_forecast = _solar_from_power_sensors(state_api, solar_entity, refresh_started)
                 if power_sensor_forecast:
-                    solar_forecast = [
-                        (slot_start, power_val if power_val > 0 else heuristic[idx][1])
-                        for idx, ((slot_start, power_val), _heuristic_slot) in enumerate(
-                            zip(power_sensor_forecast, heuristic, strict=False)
-                        )
-                    ]
+                    solar_forecast = power_sensor_forecast
                 else:
                     solar_forecast = heuristic
 
@@ -576,6 +654,9 @@ class BatterySolarOptimiserCoordinator:
             charge_rate_kw = self.get_control_value("charge_rate_kw", float(cfg.get("max_charge_kw", 3.7)))
             effective_load_w = await self._effective_load_w(cfg, refresh_started)
             low_soc = current_soc_kwh < effective_min_soc_kwh
+            first_slot = _align_to_half_hour(refresh_started)
+            plan_starts = [first_slot + timedelta(minutes=30 * i) for i in range(48)]
+            slot_overrides = self.slot_overrides_for_starts(plan_starts)
             self.plan = build_plan(
                 now=refresh_started,
                 agile_rates=agile_rates,
@@ -591,7 +672,7 @@ class BatterySolarOptimiserCoordinator:
                 previous_day_rates=previous_day_rates,
                 historical_rates=historical_rates,
                 lookback_hours=int(float(cfg.get("lookback_hours", 12))),
-                slot_overrides=self.data.get("slot_overrides", {}),
+                slot_overrides=slot_overrides,
                 discharge_aggressiveness=discharge_aggressiveness,
             )
 

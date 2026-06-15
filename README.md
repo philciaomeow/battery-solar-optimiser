@@ -80,7 +80,7 @@ Each one has:
 
 Overrides are applied before the battery/cost simulation, so the projected battery level, plan table, and `select.battery_solar_optimiser_action` all reflect the forced action.
 
-The slot numbers are relative to the current 24-hour plan. Slot `00` is the first half-hour slot in the current plan, slot `47` is the last.
+The slot numbers are relative to the current 24-hour plan. Slot `00` is the first half-hour slot in the current plan, slot `47` is the last. Internally overrides are stored against the absolute slot start time, so a future override follows its original time as the rolling plan moves forward and expired overrides are pruned instead of sticking to the next slot after rollover.
 
 ---
 
@@ -179,7 +179,8 @@ It shows:
 
 - a full-width heading
 - projected battery graph
-- Agile price and solar forecast graph
+- forecast graph for Agile price, PV, predicted load, battery charge/discharge power, and cumulative cost
+- previous-24-hours actuals graph for house load, PV power, battery power, and import cost
 - a wide 24-hour plan table
 - inline per-slot override dropdowns
 - status and freshness information
@@ -234,7 +235,7 @@ www/bso-layout-card.js
 
 4. Restart Home Assistant.
 5. Open **Battery Solar Optimiser** from the sidebar.
-6. If the custom card still shows a red configuration error, hard-refresh your browser. Custom card resources are often cached.
+6. If the custom card still shows a red configuration error or override dropdown behaviour seems stale, hard-refresh your browser. Custom card resources are often cached.
 
 ### Dashboard dependencies
 
@@ -369,6 +370,10 @@ The plan attributes include price source counts. If many slots use fallback, che
 
 Check the neighbouring future slots and the `number.battery_solar_optimiser_battery_charge_rate` value. The optimiser now prefers the cheapest upcoming charge slots and reports `hold` when the battery is already full rather than showing a misleading zero-power charge. If the physical inverter charges slower than the configured value, lower the battery charge-rate number so the plan allocates enough cheap slots to finish charging.
 
+### Override dropdown closes immediately or an override sticks after rollover
+
+Make sure `/local/bso-plan-card.js` is the latest version and hard-refresh the browser. The card avoids re-rendering while a native override select is open, and overrides are tied to absolute slot start times so expired overrides are removed as the plan rolls forward.
+
 ### The battery does not discharge as much as expected
 
 The optimiser does not plan export. In self-use mode, discharge is limited by predicted house load. Check:
@@ -419,8 +424,8 @@ node --check www/bso-layout-card.js
 - No direct inverter control built in yet.
 - No export/sell-back optimisation. This is deliberate for self-use/no-export-tariff setups.
 - Load is averaged from recent history or a manual fallback, not a detailed time-of-day household profile.
-- Solar forecast parsing is intentionally basic and may need tuning for different forecast integrations.
-- Slot overrides are relative to the current rolling 24-hour plan, not pinned to absolute calendar times.
+- Solar forecast parsing supports common Forecast.Solar power/energy sensors, but may need tuning for different forecast integrations.
+- Slot override entities are displayed as relative rows, but the selected override is pinned internally to the absolute slot start time.
 
 ---
 
@@ -430,7 +435,7 @@ node --check www/bso-layout-card.js
 - Optional export-price / sell-back optimisation for users with a real export tariff.
 - Time-varying load profiles beyond the current 24/48/72h average.
 - Better solar forecast source adapters.
-- Absolute-time manual overrides.
+- A richer override editor for selecting calendar times directly rather than relative rows.
 - HACS-ready screenshots and richer documentation.
 
 ---

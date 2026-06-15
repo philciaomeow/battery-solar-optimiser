@@ -45,7 +45,7 @@ views:
               start: hour
             header:
               show: true
-              title: Agile price and solar forecast
+              title: Forecast next 24h — price, PV, load, battery and cost
               show_states: false
             yaxis:
               - id: price
@@ -53,12 +53,18 @@ views:
                 apex_config:
                   title:
                     text: p/kWh
-              - id: solar
+              - id: energy_cost
                 opposite: true
                 decimals: 2
                 apex_config:
                   title:
-                    text: kWh/slot
+                    text: kWh / £
+              - id: power
+                opposite: true
+                decimals: 0
+                apex_config:
+                  title:
+                    text: W
             series:
               - entity: sensor.battery_solar_optimiser_plan
                 name: Agile price
@@ -69,14 +75,103 @@ views:
                   const slots = entity.attributes.slots || [];
                   return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.price || 0)]);
               - entity: sensor.battery_solar_optimiser_plan
-                name: Solar
-                yaxis_id: solar
+                name: Solar forecast
+                yaxis_id: energy_cost
                 color: '#f59e0b'
-                type: line
-                stroke_width: 3
+                type: area
+                opacity: 0.25
+                stroke_width: 2
                 data_generator: |
                   const slots = entity.attributes.slots || [];
                   return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.solar_kwh || 0)]);
+              - entity: sensor.battery_solar_optimiser_plan
+                name: Predicted load
+                yaxis_id: power
+                color: '#a855f7'
+                type: line
+                stroke_width: 2
+                data_generator: |
+                  const slots = entity.attributes.slots || [];
+                  const load = Number(entity.attributes.effective_house_load_w || 0);
+                  return slots.map((slot) => [new Date(slot.start).getTime(), load]);
+              - entity: sensor.battery_solar_optimiser_plan
+                name: Battery power
+                yaxis_id: power
+                color: '#22c55e'
+                type: line
+                stroke_width: 2
+                data_generator: |
+                  const slots = entity.attributes.slots || [];
+                  return slots.map((slot) => {
+                    const kw = Number(slot.action_kw || 0);
+                    const signedW = slot.action === 'discharging' ? -kw * 1000 : kw * 1000;
+                    return [new Date(slot.start).getTime(), signedW];
+                  });
+              - entity: sensor.battery_solar_optimiser_plan
+                name: Cumulative cost
+                yaxis_id: energy_cost
+                color: '#ef4444'
+                type: line
+                stroke_width: 2
+                data_generator: |
+                  const slots = entity.attributes.slots || [];
+                  return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.cumulative_cost_gbp || 0)]);
+          - type: custom:apexcharts-card
+            graph_span: 24h
+            header:
+              show: true
+              title: Previous 24h actuals — load, PV, battery and cost
+              show_states: false
+            yaxis:
+              - id: power
+                decimals: 0
+                apex_config:
+                  title:
+                    text: W
+              - id: cost
+                opposite: true
+                decimals: 2
+                apex_config:
+                  title:
+                    text: £
+            series:
+              - entity: sensor.solax_house_load
+                name: House load
+                yaxis_id: power
+                color: '#a855f7'
+                type: line
+                stroke_width: 2
+                group_by:
+                  duration: 10min
+                  func: avg
+              - entity: sensor.solax_pv_power_total
+                name: PV power
+                yaxis_id: power
+                color: '#f59e0b'
+                type: area
+                opacity: 0.25
+                stroke_width: 2
+                group_by:
+                  duration: 10min
+                  func: avg
+              - entity: sensor.solax_energy_dashboard_solax_battery_power
+                name: Battery power
+                yaxis_id: power
+                color: '#22c55e'
+                type: line
+                stroke_width: 2
+                group_by:
+                  duration: 10min
+                  func: avg
+              - entity: sensor.energy_modbus_bridge_import_kwh_cost
+                name: Import cost
+                yaxis_id: cost
+                color: '#ef4444'
+                type: line
+                stroke_width: 2
+                group_by:
+                  duration: 10min
+                  func: last
         plan:
           type: custom:bso-plan-card
           title: 24 hour slot plan

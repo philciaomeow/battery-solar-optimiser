@@ -159,12 +159,14 @@ class BatterySolarOptimiserSlotOverrideSelect(BatterySolarOptimiserBaseSelect):
         self._attr_current_option = OVERRIDE_NO_CHANGE
 
     async def async_added_to_hass(self) -> None:
-        """Restore the last selected override after HA restart."""
+        """Do not restore relative overrides after HA restart.
+
+        Overrides are stored against absolute slot start times in the coordinator,
+        so restoring a relative select state would apply it to the wrong slot
+        after the 24-hour plan rolls forward.
+        """
         await super().async_added_to_hass()
-        last_state = await self.async_get_last_state()
-        if last_state and last_state.state in OVERRIDE_OPTIONS:
-            self._attr_current_option = last_state.state
-            self.coordinator.set_slot_override(self.slot_index, _override_to_internal(last_state.state))
+        self._attr_current_option = OVERRIDE_NO_CHANGE
 
     @property
     def current_option(self) -> str | None:
