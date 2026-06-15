@@ -291,3 +291,77 @@ def test_slot_override_forces_action_before_simulation():
     assert plan.slots[0].action == "charge"
     assert plan.slots[1].action == "discharge"
     assert plan.projected_soc[1] > plan.projected_soc[0]
+
+
+def test_discharge_aggressiveness_increases_discharge_slots():
+    now = datetime(2026, 6, 14, 14, 0, tzinfo=timezone.utc)
+    pence = [18, 20, 23, 25, 27, 29, 31, 34, 36, 35, 30, 28]
+    rates = [(now + timedelta(minutes=30 * i), p / 100.0) for i, p in enumerate(pence)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+
+    conservative = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=1.0,
+        current_soc_kwh=5.0,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        discharge_aggressiveness=20,
+    )
+    aggressive = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=1.0,
+        current_soc_kwh=5.0,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        discharge_aggressiveness=90,
+    )
+
+    conservative_count = sum(slot.action == "discharge" for slot in conservative.slots)
+    aggressive_count = sum(slot.action == "discharge" for slot in aggressive.slots)
+    assert aggressive_count >= conservative_count
+
+
+def test_peak_export_power_drains_battery_deeper_on_expensive_slots():
+    now = datetime(2026, 6, 14, 17, 0, tzinfo=timezone.utc)
+    rates = [(now + timedelta(minutes=30 * i), 0.40 if i < 8 else 0.12) for i in range(48)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+
+    house_load_only = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=1.0,
+        current_soc_kwh=5.0,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        peak_export_kw=0.0,
+    )
+    export_enabled = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=1.0,
+        current_soc_kwh=5.0,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        peak_export_kw=1.0,
+    )
+
+    assert min(export_enabled.projected_soc) < min(house_load_only.projected_soc)
+    assert export_enabled.total_export_kwh > house_load_only.total_export_kwh

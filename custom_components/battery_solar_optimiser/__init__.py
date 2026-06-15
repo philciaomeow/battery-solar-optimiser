@@ -14,7 +14,7 @@ from .sensor import BatterySolarOptimiserCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.SENSOR, Platform.SELECT, Platform.BUTTON]
+PLATFORMS = [Platform.SENSOR, Platform.SELECT, Platform.BUTTON, Platform.NUMBER]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:

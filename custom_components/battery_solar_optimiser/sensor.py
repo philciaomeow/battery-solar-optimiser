@@ -274,6 +274,7 @@ class BatterySolarOptimiserCoordinator:
             "last_updated": None,
             "next_update_due": None,
             "slot_overrides": {},
+            "controls": {},
         }
         self.plan: Plan | None = None
         self.entities: list[SensorEntity] = []
@@ -298,6 +299,27 @@ class BatterySolarOptimiserCoordinator:
     def get_slot_override(self, slot_index: int) -> str | None:
         """Return the internal override action for a relative plan slot."""
         return dict(self.data.get("slot_overrides", {})).get(slot_index)
+
+    def set_control_value(self, key: str, value: float) -> None:
+        """Store a live tuning control value."""
+        controls = dict(self.data.get("controls", {}))
+        controls[key] = float(value)
+        self.data["controls"] = controls
+
+    def get_control_value(self, key: str, default: float) -> float:
+        """Return a live tuning control value."""
+        try:
+            return float(dict(self.data.get("controls", {})).get(key, default))
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _effective_min_soc_kwh(self, cfg: dict[str, Any]) -> float:
+        """Return the live minimum reserve converted from percentage to kWh."""
+        capacity = float(cfg.get("battery_capacity_kwh", 5.0)) or 5.0
+        configured_min = float(cfg.get("min_soc_kwh", 0.5))
+        configured_percent = (configured_min / capacity) * 100.0
+        reserve_percent = self.get_control_value("min_reserve_percent", max(20.0, configured_percent))
+        return max(0.0, min(capacity, capacity * reserve_percent / 100.0))
 
     def _next_scheduled_refresh(self, now: datetime, low_soc: bool = False) -> datetime:
         """Return the next expected refresh time.
@@ -366,10 +388,11 @@ class BatterySolarOptimiserCoordinator:
             await self._refresh_rate_entities(cfg)
 
             state_api = self.hass.states
+            effective_min_soc_kwh = self._effective_min_soc_kwh(cfg)
             soc_state = state_api.get(soc_entity)
             try:
                 if soc_state is None or soc_state.state in (None, "unavailable", "unknown"):
-                    current_soc_kwh = cfg.get("min_soc_kwh", 0.0)
+                    current_soc_kwh = effective_min_soc_kwh
                 else:
                     raw_soc = float(soc_state.state)
                     uom = soc_state.attributes.get("unit_of_measurement", "").lower()
@@ -379,7 +402,7 @@ class BatterySolarOptimiserCoordinator:
                     else:
                         current_soc_kwh = raw_soc
             except (ValueError, TypeError):
-                current_soc_kwh = cfg.get("min_soc_kwh", 0.0)
+                current_soc_kwh = effective_min_soc_kwh
 
             agile_entity = cfg.get("agile_entity", "")
             rates_state = state_api.get(agile_entity)
@@ -422,13 +445,15 @@ class BatterySolarOptimiserCoordinator:
                 else:
                     solar_forecast = heuristic
 
-            low_soc = current_soc_kwh < float(cfg.get("min_soc_kwh", 0.5))
+            discharge_aggressiveness = self.get_control_value("discharge_aggressiveness", 60.0)
+            peak_export_kw = self.get_control_value("peak_export_kw", 1.0)
+            low_soc = current_soc_kwh < effective_min_soc_kwh
             self.plan = build_plan(
                 now=refresh_started,
                 agile_rates=agile_rates,
                 solar_forecast=solar_forecast,
                 battery_capacity_kwh=float(cfg.get("battery_capacity_kwh", 5.0)),
-                min_soc_kwh=float(cfg.get("min_soc_kwh", 0.5)),
+                min_soc_kwh=effective_min_soc_kwh,
                 current_soc_kwh=current_soc_kwh,
                 load_w=float(cfg.get("hourly_load_w", 600)),
                 max_charge_kw=float(cfg.get("max_charge_kw", 3.7)),
@@ -439,6 +464,8 @@ class BatterySolarOptimiserCoordinator:
                 historical_rates=historical_rates,
                 lookback_hours=int(float(cfg.get("lookback_hours", 12))),
                 slot_overrides=self.data.get("slot_overrides", {}),
+                discharge_aggressiveness=discharge_aggressiveness,
+                peak_export_kw=peak_export_kw,
             )
 
             source_counts = {"actual": 0, "previous_day": 0, "fallback": 0}
@@ -448,6 +475,9 @@ class BatterySolarOptimiserCoordinator:
             self.data["price_source_counts"] = source_counts
             self.data["previous_day_rates_entity"] = previous_day_entity or None
             self.data["next_day_rates_entity"] = next_day_entity or None
+            self.data["effective_min_soc_kwh"] = effective_min_soc_kwh
+            self.data["discharge_aggressiveness"] = discharge_aggressiveness
+            self.data["peak_export_kw"] = peak_export_kw
 
             refresh_finished = dt_util.utcnow()
             self.data["last_updated"] = refresh_finished
@@ -462,7 +492,6 @@ class BatterySolarOptimiserCoordinator:
 
         # Schedule regular and low-SOC refreshes once, when first entity is added.
         if not self._listeners:
-            min_soc_kwh = float(cfg.get("min_soc_kwh", 0.5))
             self._listeners.append(
                 async_track_time_change(
                     self.hass,
@@ -478,7 +507,7 @@ class BatterySolarOptimiserCoordinator:
                     current_soc = float(soc_state.state)
                 except (AttributeError, ValueError, TypeError):
                     return
-                if current_soc < min_soc_kwh:
+                if current_soc < self._effective_min_soc_kwh(self.cfg):
                     await self.async_refresh()
 
             self._listeners.append(
@@ -562,6 +591,9 @@ class BatterySolarOptimiserPlanSensor(BatterySolarOptimiserBaseSensor):
             "price_source_counts": self.coordinator.data.get("price_source_counts", {}),
             "previous_day_rates_entity": self.coordinator.data.get("previous_day_rates_entity"),
             "next_day_rates_entity": self.coordinator.data.get("next_day_rates_entity"),
+            "minimum_reserve_kwh": round(float(self.coordinator.data.get("effective_min_soc_kwh", 0.0)), 3),
+            "discharge_aggressiveness": self.coordinator.data.get("discharge_aggressiveness"),
+            "peak_export_kw": self.coordinator.data.get("peak_export_kw"),
             "lookback_hours": int(float(self.coordinator.cfg.get("lookback_hours", 12))),
         }
 

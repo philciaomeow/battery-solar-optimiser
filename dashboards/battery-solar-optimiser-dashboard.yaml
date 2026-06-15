@@ -94,6 +94,14 @@ views:
               name: Next update due
             - entity: button.battery_solar_optimiser_recalculate
               name: Recalculate now
+            - type: section
+              label: Live tuning
+            - entity: number.battery_solar_optimiser_minimum_reserve
+              name: Minimum reserve — recommended 20%
+            - entity: number.battery_solar_optimiser_discharge_aggressiveness
+              name: Discharge aggressiveness — recommended 60%
+            - entity: number.battery_solar_optimiser_peak_export_power
+              name: Peak export power — recommended 1.0 kW
             - entity: select.battery_solar_optimiser_action
               name: Recommended action
             - entity: sensor.battery_solar_optimiser_plan

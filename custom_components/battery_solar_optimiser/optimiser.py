@@ -75,6 +75,8 @@ def build_plan(
     historical_rates: list[tuple[datetime, float]] | None = None,
     lookback_hours: int = 12,
     slot_overrides: dict[int, str] | None = None,
+    discharge_aggressiveness: float = 50.0,
+    peak_export_kw: float = 0.0,
 ) -> Plan:
     """Build a charge/discharge plan over the next horizon_slots half-hours.
 
@@ -161,6 +163,11 @@ def build_plan(
         percentile_expensive_threshold,
         cheap_threshold + (price_spread * 0.55),
     )
+    aggressiveness = max(0.0, min(100.0, float(discharge_aggressiveness)))
+    # 50 is the neutral default. Higher values lower the expensive threshold so
+    # the optimiser spends more of the usable battery during moderately-high
+    # Agile periods; lower values preserve more battery for only the worst slots.
+    expensive_threshold -= ((aggressiveness - 50.0) / 50.0) * min(price_spread * 0.20, 6.0)
 
     soc = max(current_soc_kwh, min_soc_kwh)
     projected_soc = [soc]
@@ -263,16 +270,19 @@ def build_plan(
                 max(0, soc - min_soc_kwh),
                 max_discharge_kw * slot_duration_h,
             )
-            discharge = min(available, max(0, net_load) / max(efficiency, 0.01))
+            export_target_kwh = max(0.0, min(float(peak_export_kw), max_discharge_kw)) * slot_duration_h
+            household_discharge_need = max(0, net_load) / max(efficiency, 0.01)
+            discharge = min(available, household_discharge_need + export_target_kwh)
             if discharge > 0.001:
                 soc -= discharge / max(efficiency, 0.01)
                 action_kw = discharge / slot_duration_h
                 remaining = net_load - discharge * efficiency
                 slot_import += max(0, remaining)
+                slot_export += max(0, -remaining)
             else:
                 action = "hold"
                 slot_import += max(0, net_load)
-            slot_export += max(0, -net_load)
+                slot_export += max(0, -net_load)
 
         else:
             # Hold: solar can charge the battery, but positive household load is
