@@ -3,272 +3,260 @@ views:
 - title: Plan
   path: bso-plan
   icon: mdi:chart-line
-  type: panel
   badges: []
   cards:
-  - type: custom:bso-layout-card
+  - type: markdown
+    content: 'Simple 24-hour battery plan using Agile prices, solar forecast and your configured household load.
+
+
+      Times are shown using the integration display timezone. Unknown Agile slots use the configured fallback price.'
+  - type: custom:apexcharts-card
+    graph_span: 24h
+    span:
+      start: hour
     header:
-      type: markdown
-      content: 'Simple 24-hour battery plan using Agile prices, solar forecast and your configured household load.
+      show: true
+      title: Projected battery level
+      show_states: false
+    yaxis:
+    - min: 0
+      max: 100
+      decimals: 0
+      apex_config:
+        title:
+          text: Battery %
+    series:
+    - entity: sensor.battery_solar_optimiser_plan
+      name: Projected battery
+      color: '#16a34a'
+      type: area
+      opacity: 0.25
+      stroke_width: 3
+      data_generator: 'const slots = entity.attributes.slots || [];
 
+        return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.battery_percent || 0)]);
 
-        Times are shown using the integration display timezone. Unknown Agile slots use the configured fallback price.'
-    columns:
-    - type: vertical-stack
-      cards:
-      - type: custom:apexcharts-card
-        graph_span: 24h
-        span:
-          start: hour
-        header:
-          show: true
-          title: Projected battery level
-          show_states: false
-        yaxis:
-        - min: 0
-          max: 100
-          decimals: 0
-          apex_config:
-            title:
-              text: Battery %
-        series:
-        - entity: sensor.battery_solar_optimiser_plan
-          name: Projected battery
-          color: '#16a34a'
-          type: area
-          opacity: 0.25
-          stroke_width: 3
-          data_generator: 'const slots = entity.attributes.slots || [];
+        '
+  - type: custom:bso-plan-card
+    title: 24 hour slot plan
+    entity: sensor.battery_solar_optimiser_plan
+    show_overrides: false
+  - type: custom:apexcharts-card
+    graph_span: 24h
+    span:
+      start: hour
+    header:
+      show: true
+      title: Forecast next 24h — price, PV, load, battery and cost
+      show_states: false
+    yaxis:
+    - id: price
+      decimals: 1
+      apex_config:
+        title:
+          text: p/kWh
+    - id: energy_cost
+      opposite: true
+      decimals: 2
+      apex_config:
+        title:
+          text: kWh / £
+    - id: power
+      opposite: true
+      decimals: 0
+      apex_config:
+        title:
+          text: W
+    series:
+    - entity: sensor.battery_solar_optimiser_plan
+      name: Agile price
+      yaxis_id: price
+      color: '#2563eb'
+      type: column
+      data_generator: 'const slots = entity.attributes.slots || [];
 
-            return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.battery_percent || 0)]);
+        return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.price || 0)]);
 
-            '
-      - type: custom:apexcharts-card
-        graph_span: 24h
-        span:
-          start: hour
-        header:
-          show: true
-          title: Forecast next 24h — price, PV, load, battery and cost
-          show_states: false
-        yaxis:
-        - id: price
-          decimals: 1
-          apex_config:
-            title:
-              text: p/kWh
-        - id: energy_cost
-          opposite: true
-          decimals: 2
-          apex_config:
-            title:
-              text: kWh / £
-        - id: power
-          opposite: true
-          decimals: 0
-          apex_config:
-            title:
-              text: W
-        series:
-        - entity: sensor.battery_solar_optimiser_plan
-          name: Agile price
-          yaxis_id: price
-          color: '#2563eb'
-          type: column
-          data_generator: 'const slots = entity.attributes.slots || [];
+        '
+    - entity: sensor.battery_solar_optimiser_plan
+      name: Solar forecast
+      yaxis_id: energy_cost
+      color: '#f59e0b'
+      type: area
+      opacity: 0.25
+      stroke_width: 2
+      data_generator: 'const slots = entity.attributes.slots || [];
 
-            return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.price || 0)]);
+        return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.solar_kwh || 0)]);
 
-            '
-        - entity: sensor.battery_solar_optimiser_plan
-          name: Solar forecast
-          yaxis_id: energy_cost
-          color: '#f59e0b'
-          type: area
-          opacity: 0.25
-          stroke_width: 2
-          data_generator: 'const slots = entity.attributes.slots || [];
+        '
+    - entity: sensor.battery_solar_optimiser_plan
+      name: Predicted load
+      yaxis_id: power
+      color: '#a855f7'
+      type: line
+      stroke_width: 2
+      data_generator: 'const slots = entity.attributes.slots || [];
 
-            return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.solar_kwh || 0)]);
+        const load = Number(entity.attributes.effective_house_load_w || 0);
 
-            '
-        - entity: sensor.battery_solar_optimiser_plan
-          name: Predicted load
-          yaxis_id: power
-          color: '#a855f7'
-          type: line
-          stroke_width: 2
-          data_generator: 'const slots = entity.attributes.slots || [];
+        return slots.map((slot) => [new Date(slot.start).getTime(), load]);
 
-            const load = Number(entity.attributes.effective_house_load_w || 0);
+        '
+    - entity: sensor.battery_solar_optimiser_plan
+      name: Battery power
+      yaxis_id: power
+      color: '#22c55e'
+      type: line
+      stroke_width: 2
+      data_generator: "const slots = entity.attributes.slots || [];\nreturn slots.map((slot) => {\n  const kw = Number(slot.action_kw || 0);\n  const signedW = slot.action === 'discharging' ? -kw * 1000 : kw * 1000;\n  return [new Date(slot.start).getTime(), signedW];\n});\n"
+    - entity: sensor.battery_solar_optimiser_plan
+      name: Cumulative cost
+      yaxis_id: energy_cost
+      color: '#ef4444'
+      type: line
+      stroke_width: 2
+      data_generator: 'const slots = entity.attributes.slots || [];
 
-            return slots.map((slot) => [new Date(slot.start).getTime(), load]);
+        return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.cumulative_cost_gbp || 0)]);
 
-            '
-        - entity: sensor.battery_solar_optimiser_plan
-          name: Battery power
-          yaxis_id: power
-          color: '#22c55e'
-          type: line
-          stroke_width: 2
-          data_generator: "const slots = entity.attributes.slots || [];\nreturn slots.map((slot) => {\n  const kw = Number(slot.action_kw || 0);\n  const signedW = slot.action === 'discharging' ? -kw * 1000 : kw * 1000;\n  return [new Date(slot.start).getTime(), signedW];\n});\n"
-        - entity: sensor.battery_solar_optimiser_plan
-          name: Cumulative cost
-          yaxis_id: energy_cost
-          color: '#ef4444'
-          type: line
-          stroke_width: 2
-          data_generator: 'const slots = entity.attributes.slots || [];
-
-            return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.cumulative_cost_gbp || 0)]);
-
-            '
-      - type: custom:apexcharts-card
-        graph_span: 24h
-        header:
-          show: true
-          title: Previous 24h actuals — load, PV, battery and cost
-          show_states: false
-        yaxis:
-        - id: power
-          decimals: 0
-          apex_config:
-            title:
-              text: W
-        - id: cost
-          opposite: true
-          decimals: 2
-          apex_config:
-            title:
-              text: £
-        series:
-        - entity: sensor.solax_house_load
-          name: House load
-          yaxis_id: power
-          color: '#a855f7'
-          type: line
-          stroke_width: 2
-          group_by:
-            duration: 10min
-            func: avg
-        - entity: sensor.solax_pv_power_total
-          name: PV power
-          yaxis_id: power
-          color: '#f59e0b'
-          type: area
-          opacity: 0.25
-          stroke_width: 2
-          group_by:
-            duration: 10min
-            func: avg
-        - entity: sensor.solax_energy_dashboard_solax_battery_power
-          name: Battery power
-          yaxis_id: power
-          color: '#22c55e'
-          type: line
-          stroke_width: 2
-          group_by:
-            duration: 10min
-            func: avg
-        - entity: sensor.energy_modbus_bridge_import_kwh_cost
-          name: Import cost
-          yaxis_id: cost
-          color: '#ef4444'
-          type: line
-          stroke_width: 2
-          group_by:
-            duration: 10min
-            func: last
-    - type: custom:bso-plan-card
-      title: 24 hour slot plan
-      entity: sensor.battery_solar_optimiser_plan
-      show_overrides: false
+        '
+  - type: custom:apexcharts-card
+    graph_span: 24h
+    header:
+      show: true
+      title: Previous 24h actuals — load, PV, battery and cost
+      show_states: false
+    yaxis:
+    - id: power
+      decimals: 0
+      apex_config:
+        title:
+          text: W
+    - id: cost
+      opposite: true
+      decimals: 2
+      apex_config:
+        title:
+          text: £
+    series:
+    - entity: sensor.solax_house_load
+      name: House load
+      yaxis_id: power
+      color: '#a855f7'
+      type: line
+      stroke_width: 2
+      group_by:
+        duration: 10min
+        func: avg
+    - entity: sensor.solax_pv_power_total
+      name: PV power
+      yaxis_id: power
+      color: '#f59e0b'
+      type: area
+      opacity: 0.25
+      stroke_width: 2
+      group_by:
+        duration: 10min
+        func: avg
+    - entity: sensor.solax_energy_dashboard_solax_battery_power
+      name: Battery power
+      yaxis_id: power
+      color: '#22c55e'
+      type: line
+      stroke_width: 2
+      group_by:
+        duration: 10min
+        func: avg
+    - entity: sensor.energy_modbus_bridge_import_kwh_cost
+      name: Import cost
+      yaxis_id: cost
+      color: '#ef4444'
+      type: line
+      stroke_width: 2
+      group_by:
+        duration: 10min
+        func: last
 - title: Settings
   path: bso-settings
   icon: mdi:cog
-  type: panel
   badges: []
   cards:
-  - type: custom:bso-layout-card
-    header:
-      type: markdown
-      content: Override plan slots and tune live parameters. Tap any source entity tile to open its Home Assistant more-info popup. Control changes wait 30 seconds before recalculating.
-    columns:
-    - type: custom:bso-plan-card
-      title: 24 hour slot plan
-      entity: sensor.battery_solar_optimiser_plan
-    - type: vertical-stack
-      cards:
-      - type: entities
-        title: Live tuning
-        show_header_toggle: false
-        entities:
-        - entity: number.battery_solar_optimiser_minimum_reserve
-          name: Minimum reserve — recommended 20%
-        - entity: number.battery_solar_optimiser_discharge_aggressiveness
-          name: Discharge aggressiveness — recommended 60%
-        - entity: number.battery_solar_optimiser_battery_charge_rate
-          name: Battery charge rate
-        - type: section
-          label: House load averaging
-        - entity: switch.battery_solar_optimiser_use_average_house_load
-          name: Use calculated average house load
-        - entity: select.battery_solar_optimiser_house_load_average_period
-          name: Average period
-        - entity: sensor.battery_solar_optimiser_average_house_load
-          name: Calculated average load
-        - entity: number.battery_solar_optimiser_manual_house_load
-          name: Manual house load — fallback 600 W
-        - entity: select.battery_solar_optimiser_action
-          name: Recommended action
-        - entity: button.battery_solar_optimiser_recalculate
-          name: Recalculate now
-      - type: entities
-        title: Source entities
-        show_header_toggle: false
-        entities:
-        - entity: sensor.battery_solar_optimiser_status
-          name: Optimiser status
-        - entity: sensor.battery_solar_optimiser_last_updated
-          name: Plan last updated
-        - entity: sensor.battery_solar_optimiser_next_update_due
-          name: Next update due
-        - type: section
-          label: Agile & forecast
-        - entity: event.octopus_energy_electricity_17m1095828_1100014794882_current_day_rates
-          name: Agile current-day rates
-        - entity: event.octopus_energy_electricity_17m1095828_1100014794882_next_day_rates
-          name: Agile next-day rates
-        - entity: event.octopus_energy_electricity_17m1095828_1100014794882_previous_day_rates
-          name: Agile previous-day rates
-        - type: section
-          label: Solar & load
-        - entity: sensor.solax_house_load
-          name: House load
-        - entity: sensor.power_production_now
-          name: Solar forecast (Forecast.Solar)
-        - type: section
-          label: Battery
-        - entity: sensor.solax_battery_soc
-          name: Battery SOC
-        - entity: sensor.battery_solar_optimiser_plan
-          name: Current slot action
-        - entity: sensor.battery_solar_optimiser_next_action
-          name: Current/next action window
-      - type: markdown
-        title: Totals
-        content: '{% set p = ''sensor.battery_solar_optimiser_plan'' %}
+  - type: markdown
+    content: Override plan slots and tune live parameters. Tap any source entity tile to open its Home Assistant more-info popup. Control changes wait 30 seconds before recalculating.
+  - type: custom:bso-plan-card
+    title: 24 hour slot plan
+    entity: sensor.battery_solar_optimiser_plan
+  - type: entities
+    title: Live tuning
+    show_header_toggle: false
+    entities:
+    - entity: number.battery_solar_optimiser_minimum_reserve
+      name: Minimum reserve — recommended 20%
+    - entity: number.battery_solar_optimiser_discharge_aggressiveness
+      name: Discharge aggressiveness — recommended 60%
+    - entity: number.battery_solar_optimiser_battery_charge_rate
+      name: Battery charge rate
+    - type: section
+      label: House load averaging
+    - entity: switch.battery_solar_optimiser_use_average_house_load
+      name: Use calculated average house load
+    - entity: select.battery_solar_optimiser_house_load_average_period
+      name: Average period
+    - entity: sensor.battery_solar_optimiser_average_house_load
+      name: Calculated average load
+    - entity: number.battery_solar_optimiser_manual_house_load
+      name: Manual house load — fallback 600 W
+    - entity: select.battery_solar_optimiser_action
+      name: Recommended action
+    - entity: button.battery_solar_optimiser_recalculate
+      name: Recalculate now
+  - type: entities
+    title: Source entities
+    show_header_toggle: false
+    entities:
+    - entity: sensor.battery_solar_optimiser_status
+      name: Optimiser status
+    - entity: sensor.battery_solar_optimiser_last_updated
+      name: Plan last updated
+    - entity: sensor.battery_solar_optimiser_next_update_due
+      name: Next update due
+    - type: section
+      label: Agile & forecast
+    - entity: event.octopus_energy_electricity_17m1095828_1100014794882_current_day_rates
+      name: Agile current-day rates
+    - entity: event.octopus_energy_electricity_17m1095828_1100014794882_next_day_rates
+      name: Agile next-day rates
+    - entity: event.octopus_energy_electricity_17m1095828_1100014794882_previous_day_rates
+      name: Agile previous-day rates
+    - type: section
+      label: Solar & load
+    - entity: sensor.solax_house_load
+      name: House load
+    - entity: sensor.power_production_now
+      name: Solar forecast (Forecast.Solar)
+    - type: section
+      label: Battery
+    - entity: sensor.solax_battery_soc
+      name: Battery SOC
+    - entity: sensor.battery_solar_optimiser_plan
+      name: Current slot action
+    - entity: sensor.battery_solar_optimiser_next_action
+      name: Current/next action window
+  - type: markdown
+    title: Totals
+    content: '{% set p = ''sensor.battery_solar_optimiser_plan'' %}
 
-          **Current slot:** {{ state_attr(p, ''current_slot_start_local'') }}–{{ state_attr(p, ''current_slot_end_local'') }}
+      **Current slot:** {{ state_attr(p, ''current_slot_start_local'') }}–{{ state_attr(p, ''current_slot_end_local'') }}
 
-          **Initial battery:** {{ state_attr(p, ''initial_soc_kwh'') }} kWh
+      **Initial battery:** {{ state_attr(p, ''initial_soc_kwh'') }} kWh
 
-          **Average house load used:** {{ state_attr(p, ''effective_house_load_w'') }} W
+      **Average house load used:** {{ state_attr(p, ''effective_house_load_w'') }} W
 
-          **Average load source:** {{ state_attr(p, ''house_load_entity'') or ''manual fallback'' }} over {{ state_attr(p, ''house_load_average_period_hours'') or ''manual'' }}h
+      **Average load source:** {{ state_attr(p, ''house_load_entity'') or ''manual fallback'' }} over {{ state_attr(p, ''house_load_average_period_hours'') or ''manual'' }}h
 
-          **Total import:** {{ state_attr(p, ''total_import_kwh'') }} kWh
+      **Total import:** {{ state_attr(p, ''total_import_kwh'') }} kWh
 
-          **Total export:** {{ state_attr(p, ''total_export_kwh'') }} kWh
+      **Total export:** {{ state_attr(p, ''total_export_kwh'') }} kWh
 
-          **Estimated daily cost:** {{ states(''sensor.battery_solar_optimiser_estimated_cost'') }} GBP'
+      **Estimated daily cost:** {{ states(''sensor.battery_solar_optimiser_estimated_cost'') }} GBP'

@@ -180,14 +180,13 @@ It has two views:
 - **Plan** — projected battery graph, forecast graph, previous-24-hours actuals, and a read-only 24-hour plan table. Forced slots are highlighted, but this page intentionally has no override dropdowns so it stays calm while graphs update.
 - **Settings** — the same 24-hour plan table with per-slot override dropdowns, live tuning controls, source-entity reference rows, and totals.
 
-The dashboard uses two local custom-card resources from this repository:
+The dashboard uses one local custom-card resource from this repository:
 
 ```text
 www/bso-plan-card.js
-www/bso-layout-card.js
 ```
 
-`bso-layout-card.js` provides the responsive two-column layout: columns sit side-by-side on desktop and stack vertically on phones. `bso-plan-card.js` renders the 24-hour plan table.
+The dashboard itself uses native Lovelace/masonry layout for maximum browser compatibility. `bso-plan-card.js` renders the 24-hour plan table.
 
 ### Dashboard installation
 
@@ -197,24 +196,21 @@ www/bso-layout-card.js
    /config/dashboards/battery-solar-optimiser-dashboard.yaml
    ```
 
-2. Copy the custom card JavaScript files into Home Assistant's `www` folder:
+2. Copy the custom card JavaScript file into Home Assistant's `www` folder:
 
    ```text
    /config/www/bso-plan-card.js
-   /config/www/bso-layout-card.js
    ```
 
-3. Register the custom card resources in `configuration.yaml`.
+3. Register the custom card resource in `configuration.yaml`.
 
-   If your Home Assistant uses YAML-mode Lovelace, add them under the global `lovelace.resources` section:
+   If your Home Assistant uses YAML-mode Lovelace, add it under the global `lovelace.resources` section:
 
    ```yaml
    lovelace:
      resource_mode: yaml
      resources:
        - url: /local/bso-plan-card.js
-         type: module
-       - url: /local/bso-layout-card.js
          type: module
      dashboards:
        battery-solar-optimiser:
@@ -345,14 +341,13 @@ It is not a mathematical optimiser and does not use an LP/MILP solver. That is d
 
 ### The dashboard shows a red custom card configuration error
 
-Check that both custom card files are available:
+Check that the custom card file is available:
 
 ```text
 /local/bso-plan-card.js
-/local/bso-layout-card.js
 ```
 
-Then check they are registered under global Lovelace resources in `configuration.yaml`, not only inside an individual dashboard YAML file.
+Then check it is registered under global Lovelace resources in `configuration.yaml`, not only inside an individual dashboard YAML file.
 
 Restart Home Assistant and hard-refresh your browser.
 
