@@ -14,7 +14,7 @@ from .sensor import BatterySolarOptimiserCoordinator
 
 CONTROL_MIN_RESERVE_PERCENT = "min_reserve_percent"
 CONTROL_DISCHARGE_AGGRESSIVENESS = "discharge_aggressiveness"
-CONTROL_PEAK_EXPORT_KW = "peak_export_kw"
+CONTROL_MANUAL_HOUSE_LOAD_W = "manual_house_load_w"
 
 
 async def async_setup_entry(
@@ -27,7 +27,7 @@ async def async_setup_entry(
     entities = [
         BatterySolarOptimiserMinReserveNumber(coordinator),
         BatterySolarOptimiserDischargeAggressivenessNumber(coordinator),
-        BatterySolarOptimiserPeakExportNumber(coordinator),
+        BatterySolarOptimiserManualHouseLoadNumber(coordinator),
     ]
     coordinator.entities.extend(entities)
     async_add_entities(entities)
@@ -58,9 +58,13 @@ class BatterySolarOptimiserBaseNumber(NumberEntity, RestoreEntity):
     def extra_state_attributes(self) -> dict[str, float | str]:
         return {
             "recommended_value": self.recommended_value,
-            "recommended_display": f"{self.recommended_value:g}%",
+            "recommended_display": self.recommended_display,
             "description": self.description,
         }
+
+    @property
+    def recommended_display(self) -> str:
+        return f"{self.recommended_value:g}%"
 
     async def async_added_to_hass(self) -> None:
         """Restore the live tuning value after HA restart."""
@@ -117,28 +121,25 @@ class BatterySolarOptimiserDischargeAggressivenessNumber(BatterySolarOptimiserBa
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_discharge_aggressiveness"
 
 
-class BatterySolarOptimiserPeakExportNumber(BatterySolarOptimiserBaseNumber):
-    """Extra discharge/export power to spend battery during expensive slots."""
+class BatterySolarOptimiserManualHouseLoadNumber(BatterySolarOptimiserBaseNumber):
+    """Manual average house load fallback when history averaging is disabled/unavailable."""
 
-    control_key = CONTROL_PEAK_EXPORT_KW
-    recommended_value = 1.0
-    description = "Extra battery discharge power during expensive slots. Raise to drain deeper; lower to cover house load only."
-    _attr_name = "Peak Export Power"
-    _attr_icon = "mdi:transmission-tower-export"
+    control_key = CONTROL_MANUAL_HOUSE_LOAD_W
+    recommended_value = 600.0
+    description = "Manual average house load used when calculated averaging is disabled or unavailable."
+    _attr_name = "Manual House Load"
+    _attr_icon = "mdi:home-lightning-bolt"
     _attr_device_class = NumberDeviceClass.POWER
-    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
     _attr_native_min_value = 0.0
-    _attr_native_max_value = 3.7
-    _attr_native_step = 0.1
+    _attr_native_max_value = 5000.0
+    _attr_native_step = 10.0
+    _attr_mode = NumberMode.BOX
 
     def __init__(self, coordinator: BatterySolarOptimiserCoordinator) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_peak_export_kw"
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_manual_house_load_w"
 
     @property
-    def extra_state_attributes(self) -> dict[str, float | str]:
-        return {
-            "recommended_value": self.recommended_value,
-            "recommended_display": f"{self.recommended_value:g} kW",
-            "description": self.description,
-        }
+    def recommended_display(self) -> str:
+        return f"{self.recommended_value:g} W"

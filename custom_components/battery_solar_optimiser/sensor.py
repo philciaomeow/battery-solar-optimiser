@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -19,6 +19,7 @@ from homeassistant.helpers.event import (
 )
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
+from homeassistant.const import UnitOfEnergy
 
 from .const import (
     ACTION_CHARGING,
@@ -48,6 +49,13 @@ def _parse_dt(value: Any) -> datetime | None:
         except ValueError:
             return None
     return None
+
+
+def _to_utc(value: datetime) -> datetime:
+    """Return a timezone-aware UTC datetime."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _local_time(value: datetime, time_zone: str = "Europe/London") -> str:
@@ -164,6 +172,19 @@ def _power_state_to_slot_kwh(state) -> float | None:
     return None
 
 
+def _power_state_to_watts(state) -> float | None:
+    """Convert a W/kW power state to watts."""
+    value = _state_float(state)
+    if value is None:
+        return None
+    uom = str(state.attributes.get("unit_of_measurement", "")).lower()
+    if uom == "w":
+        return max(0.0, value)
+    if uom == "kw":
+        return max(0.0, value * 1000.0)
+    return None
+
+
 def _energy_state_to_half_hour_kwh(state) -> float | None:
     """Convert an hourly kWh energy state to a half-hour slot estimate."""
     value = _state_float(state)
@@ -235,6 +256,7 @@ async def async_setup_entry(
         BatterySolarOptimiserLastUpdatedSensor(coordinator),
         BatterySolarOptimiserNextUpdateSensor(coordinator),
         BatterySolarOptimiserStatusSensor(coordinator),
+        BatterySolarOptimiserAverageHouseLoadSensor(coordinator),
     ]
     coordinator.entities.extend(entities)
 
@@ -349,6 +371,111 @@ class BatterySolarOptimiserCoordinator:
         """Return the timezone used for human-facing plan times."""
         return str(self.cfg.get("display_timezone", "Europe/London"))
 
+    def _default_load_power_entity(self) -> str:
+        """Infer a likely house-load power sensor if one is not configured."""
+        preferred = (
+            "sensor.solax_house_load",
+            "sensor.solax_energy_dashboard_solax_home_consumption_power",
+            "sensor.solax_inverter_power",
+        )
+        for entity_id in preferred:
+            if self.hass.states.get(entity_id):
+                return entity_id
+        for state in self.hass.states.async_all("sensor"):
+            entity_id = state.entity_id.lower()
+            friendly = str(state.attributes.get("friendly_name", "")).lower()
+            uom = str(state.attributes.get("unit_of_measurement", "")).lower()
+            if uom in ("w", "kw") and ("house_load" in entity_id or "home_consumption" in entity_id or "house load" in friendly):
+                return state.entity_id
+        return ""
+
+    def _load_power_entity(self, cfg: dict[str, Any]) -> str:
+        """Return configured/inferred live house-load power sensor."""
+        return str(cfg.get("load_power_entity") or self._default_load_power_entity())
+
+    def _average_watts_from_states(self, states: list[Any], start_time: datetime, end_time: datetime) -> float | None:
+        """Calculate a time-weighted average W from recorder states."""
+        samples: list[tuple[datetime, float]] = []
+        for state in states:
+            watts = _power_state_to_watts(state)
+            if watts is None:
+                continue
+            ts = getattr(state, "last_updated", None) or getattr(state, "last_changed", None)
+            if ts is None:
+                continue
+            samples.append((_to_utc(ts), watts))
+        if not samples:
+            return None
+        samples.sort(key=lambda item: item[0])
+        total_wh = 0.0
+        total_hours = 0.0
+        last_ts = start_time
+        last_watts = samples[0][1]
+        for ts, watts in samples:
+            ts = max(start_time, min(ts, end_time))
+            if ts > last_ts:
+                hours = (ts - last_ts).total_seconds() / 3600.0
+                total_wh += last_watts * hours
+                total_hours += hours
+            last_ts = ts
+            last_watts = watts
+        if end_time > last_ts:
+            hours = (end_time - last_ts).total_seconds() / 3600.0
+            total_wh += last_watts * hours
+            total_hours += hours
+        if total_hours <= 0:
+            return samples[-1][1]
+        return max(0.0, total_wh / total_hours)
+
+    async def _calculate_average_house_load_w(self, cfg: dict[str, Any], now: datetime) -> float | None:
+        """Calculate average house load from recorder history."""
+        entity_id = self._load_power_entity(cfg)
+        hours = int(self.get_control_value("house_load_average_hours", 24))
+        self.data["house_load_average_period_hours"] = hours
+        self.data["house_load_entity"] = entity_id or None
+        if not entity_id:
+            return None
+        start_time = now - timedelta(hours=hours)
+        end_time = now
+
+        def _fetch_states():
+            from homeassistant.components.recorder import history as recorder_history
+
+            return recorder_history.get_significant_states(
+                self.hass,
+                start_time,
+                end_time,
+                entity_ids=[entity_id],
+                significant_changes_only=False,
+                minimal_response=False,
+                no_attributes=False,
+            ).get(entity_id, [])
+
+        try:
+            from homeassistant.components.recorder import get_instance
+
+            states = await get_instance(self.hass).async_add_executor_job(_fetch_states)
+        except Exception as err:  # pragma: no cover - recorder availability varies in tests
+            _LOGGER.warning("Could not calculate average house load from %s: %s", entity_id, err)
+            return None
+        average_w = self._average_watts_from_states(states, start_time, end_time)
+        if average_w is None:
+            current_w = _power_state_to_watts(self.hass.states.get(entity_id))
+            average_w = current_w
+        return average_w
+
+    async def _effective_load_w(self, cfg: dict[str, Any], now: datetime) -> float:
+        """Return load W used for planning and store display metadata."""
+        manual_w = self.get_control_value("manual_house_load_w", float(cfg.get("hourly_load_w", 600)))
+        use_average = bool(self.get_control_value("use_average_house_load", 1.0))
+        average_w = await self._calculate_average_house_load_w(cfg, now) if use_average else None
+        effective_w = average_w if average_w is not None else manual_w
+        self.data["manual_house_load_w"] = manual_w
+        self.data["average_house_load_w"] = average_w
+        self.data["effective_house_load_w"] = effective_w
+        self.data["use_average_house_load"] = use_average
+        return float(effective_w)
+
     async def _refresh_rate_entities(self, cfg: dict[str, Any]) -> None:
         """Ask Home Assistant to refresh Octopus rate entities before planning.
 
@@ -446,7 +573,7 @@ class BatterySolarOptimiserCoordinator:
                     solar_forecast = heuristic
 
             discharge_aggressiveness = self.get_control_value("discharge_aggressiveness", 60.0)
-            peak_export_kw = self.get_control_value("peak_export_kw", 1.0)
+            effective_load_w = await self._effective_load_w(cfg, refresh_started)
             low_soc = current_soc_kwh < effective_min_soc_kwh
             self.plan = build_plan(
                 now=refresh_started,
@@ -455,7 +582,7 @@ class BatterySolarOptimiserCoordinator:
                 battery_capacity_kwh=float(cfg.get("battery_capacity_kwh", 5.0)),
                 min_soc_kwh=effective_min_soc_kwh,
                 current_soc_kwh=current_soc_kwh,
-                load_w=float(cfg.get("hourly_load_w", 600)),
+                load_w=effective_load_w,
                 max_charge_kw=float(cfg.get("max_charge_kw", 3.7)),
                 max_discharge_kw=float(cfg.get("max_discharge_kw", 3.7)),
                 efficiency=float(cfg.get("round_trip_efficiency", 0.95)),
@@ -465,7 +592,6 @@ class BatterySolarOptimiserCoordinator:
                 lookback_hours=int(float(cfg.get("lookback_hours", 12))),
                 slot_overrides=self.data.get("slot_overrides", {}),
                 discharge_aggressiveness=discharge_aggressiveness,
-                peak_export_kw=peak_export_kw,
             )
 
             source_counts = {"actual": 0, "previous_day": 0, "fallback": 0}
@@ -477,7 +603,6 @@ class BatterySolarOptimiserCoordinator:
             self.data["next_day_rates_entity"] = next_day_entity or None
             self.data["effective_min_soc_kwh"] = effective_min_soc_kwh
             self.data["discharge_aggressiveness"] = discharge_aggressiveness
-            self.data["peak_export_kw"] = peak_export_kw
 
             refresh_finished = dt_util.utcnow()
             self.data["last_updated"] = refresh_finished
@@ -593,7 +718,12 @@ class BatterySolarOptimiserPlanSensor(BatterySolarOptimiserBaseSensor):
             "next_day_rates_entity": self.coordinator.data.get("next_day_rates_entity"),
             "minimum_reserve_kwh": round(float(self.coordinator.data.get("effective_min_soc_kwh", 0.0)), 3),
             "discharge_aggressiveness": self.coordinator.data.get("discharge_aggressiveness"),
-            "peak_export_kw": self.coordinator.data.get("peak_export_kw"),
+            "effective_house_load_w": round(float(self.coordinator.data.get("effective_house_load_w", 0.0)), 1),
+            "average_house_load_w": round(float(self.coordinator.data.get("average_house_load_w") or 0.0), 1),
+            "manual_house_load_w": round(float(self.coordinator.data.get("manual_house_load_w", 0.0)), 1),
+            "use_average_house_load": self.coordinator.data.get("use_average_house_load"),
+            "house_load_average_period_hours": self.coordinator.data.get("house_load_average_period_hours"),
+            "house_load_entity": self.coordinator.data.get("house_load_entity"),
             "lookback_hours": int(float(self.coordinator.cfg.get("lookback_hours", 12))),
         }
 
@@ -710,3 +840,40 @@ class BatterySolarOptimiserStatusSensor(BatterySolarOptimiserBaseSensor):
     @property
     def native_value(self) -> str:
         return str(self.coordinator.data.get("status") or "idle")
+
+
+class BatterySolarOptimiserAverageHouseLoadSensor(BatterySolarOptimiserBaseSensor):
+    """Sensor showing calculated/effective average house load."""
+
+    _attr_name = "Average House Load"
+    _attr_icon = "mdi:home-lightning-bolt"
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+
+    def __init__(self, coordinator: BatterySolarOptimiserCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_average_house_load"
+
+    @property
+    def native_value(self) -> float | None:
+        watts = self.coordinator.data.get("average_house_load_w")
+        if watts is None:
+            watts = self.coordinator.data.get("effective_house_load_w")
+        try:
+            # kWh per hour is numerically kW; this matches the planning load input.
+            return round(float(watts) / 1000.0, 3)
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        average_w = self.coordinator.data.get("average_house_load_w")
+        effective_w = self.coordinator.data.get("effective_house_load_w")
+        manual_w = self.coordinator.data.get("manual_house_load_w")
+        return {
+            "average_w": round(float(average_w), 1) if average_w is not None else None,
+            "effective_w": round(float(effective_w), 1) if effective_w is not None else None,
+            "manual_w": round(float(manual_w), 1) if manual_w is not None else None,
+            "period_hours": self.coordinator.data.get("house_load_average_period_hours"),
+            "source_entity": self.coordinator.data.get("house_load_entity"),
+            "use_average": self.coordinator.data.get("use_average_house_load"),
+        }

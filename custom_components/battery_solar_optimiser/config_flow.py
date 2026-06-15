@@ -27,6 +27,7 @@ _LOGGER = logging.getLogger(__name__)
 
 AGILE_ENTITY_PATTERNS = ("octopus_energy", "agile")
 SOLAR_ENTITY_PATTERNS = ("forecast_solar", "solcast", "solar_forecast", "power_production", "energy_production")
+LOAD_ENTITY_PATTERNS = ("solax_house_load", "house_load", "home_consumption", "power_demand")
 BATTERY_SOC_PATTERNS = ("battery_soc", "battery_state_of_charge", "bms_soc")
 INVERTER_MODE_PATTERNS = ("solar_inverter", "inverter_mode", "solax")
 
@@ -79,6 +80,9 @@ def _score_entity(entity_id: str, attrs: dict, patterns: tuple[str, ...], key: s
     elif key == "inverter_mode_entity":
         if "mode" in entity_id_lower:
             score += 5
+    elif key == "load_power_entity":
+        if attrs.get("unit_of_measurement") in ("W", "kW"):
+            score += 10
 
     # Avoid predbat leftovers for all keys
     if "predbat" in entity_id_lower:
@@ -93,8 +97,8 @@ def _score_entity(entity_id: str, attrs: dict, patterns: tuple[str, ...], key: s
 
 def _guess_entities(hass) -> dict[str, str]:
     """Suggest likely entity IDs from existing Home Assistant entities."""
-    best = {"agile_entity": "", "next_day_rates_entity": "", "previous_day_rates_entity": "", "solar_forecast_entity": "", "battery_soc_entity": "", "inverter_mode_entity": ""}
-    scores = {"agile_entity": 0, "next_day_rates_entity": 0, "previous_day_rates_entity": 0, "solar_forecast_entity": 0, "battery_soc_entity": 0, "inverter_mode_entity": 0}
+    best = {"agile_entity": "", "next_day_rates_entity": "", "previous_day_rates_entity": "", "solar_forecast_entity": "", "battery_soc_entity": "", "inverter_mode_entity": "", "load_power_entity": ""}
+    scores = {"agile_entity": 0, "next_day_rates_entity": 0, "previous_day_rates_entity": 0, "solar_forecast_entity": 0, "battery_soc_entity": 0, "inverter_mode_entity": 0, "load_power_entity": 0}
     for state in hass.states.async_all():
         entity_id = state.entity_id
         # Skip non-entity helpers for device matching
@@ -108,6 +112,7 @@ def _guess_entities(hass) -> dict[str, str]:
             ("solar_forecast_entity", SOLAR_ENTITY_PATTERNS),
             ("battery_soc_entity", BATTERY_SOC_PATTERNS),
             ("inverter_mode_entity", INVERTER_MODE_PATTERNS),
+            ("load_power_entity", LOAD_ENTITY_PATTERNS),
         ):
             s = _score_entity(entity_id, attrs, patterns, key)
             # Only consider this entity if at least one pattern matches
@@ -155,6 +160,10 @@ def _schema(
                 "inverter_mode_entity",
                 default=defaults.get("inverter_mode_entity") or guesses.get("inverter_mode_entity"),
             ): EntitySelector(EntitySelectorConfig(domain=["select", "sensor", "switch", "number"])),
+            vol.Optional(
+                "load_power_entity",
+                default=defaults.get("load_power_entity") or guesses.get("load_power_entity"),
+            ): EntitySelector(EntitySelectorConfig(domain="sensor")),
             vol.Required(
                 "battery_capacity_kwh",
                 default=float(defaults.get("battery_capacity_kwh", 5.0)),

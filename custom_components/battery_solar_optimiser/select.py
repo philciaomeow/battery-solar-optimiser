@@ -21,6 +21,8 @@ OVERRIDE_NO_CHANGE = "No change"
 OVERRIDE_FORCE_CHARGE = "Force charge"
 OVERRIDE_FORCE_DISCHARGE = "Force discharge"
 OVERRIDE_OPTIONS = [OVERRIDE_NO_CHANGE, OVERRIDE_FORCE_CHARGE, OVERRIDE_FORCE_DISCHARGE]
+LOAD_PERIOD_OPTIONS = ["24 hours", "48 hours", "72 hours"]
+LOAD_PERIOD_TO_HOURS = {"24 hours": 24, "48 hours": 48, "72 hours": 72}
 
 
 def _map_action(action: str) -> str:
@@ -54,7 +56,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up the select platform."""
     coordinator: BatterySolarOptimiserCoordinator = hass.data[DOMAIN][config_entry.entry_id]
-    entities = [BatterySolarOptimiserActionSelect(coordinator)]
+    entities = [
+        BatterySolarOptimiserActionSelect(coordinator),
+        BatterySolarOptimiserLoadAveragePeriodSelect(coordinator),
+    ]
     entities.extend(BatterySolarOptimiserSlotOverrideSelect(coordinator, idx) for idx in range(48))
     coordinator.entities.extend(entities)
     async_add_entities(entities)
@@ -104,6 +109,40 @@ class BatterySolarOptimiserActionSelect(BatterySolarOptimiserBaseSelect):
             ACTION_DISCHARGING: "mdi:battery-minus",
             ACTION_HOLD: "mdi:battery",
         }.get(self.current_option or ACTION_HOLD, "mdi:battery")
+
+
+class BatterySolarOptimiserLoadAveragePeriodSelect(BatterySolarOptimiserBaseSelect):
+    """Select how much history to use for calculated average house load."""
+
+    _attr_icon = "mdi:history"
+    _attr_options = LOAD_PERIOD_OPTIONS
+
+    def __init__(self, coordinator: BatterySolarOptimiserCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "House Load Average Period"
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_house_load_average_period"
+        self._attr_current_option = LOAD_PERIOD_OPTIONS[0]
+
+    async def async_added_to_hass(self) -> None:
+        """Restore period after HA restart."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        option = last_state.state if last_state and last_state.state in LOAD_PERIOD_OPTIONS else LOAD_PERIOD_OPTIONS[0]
+        self._attr_current_option = option
+        self.coordinator.set_control_value("house_load_average_hours", LOAD_PERIOD_TO_HOURS[option])
+
+    @property
+    def current_option(self) -> str | None:
+        hours = int(self.coordinator.get_control_value("house_load_average_hours", 24))
+        return f"{hours} hours" if hours in (24, 48, 72) else LOAD_PERIOD_OPTIONS[0]
+
+    async def async_select_option(self, option: str) -> None:
+        """Set averaging period and recalculate."""
+        if option not in LOAD_PERIOD_OPTIONS:
+            return
+        self._attr_current_option = option
+        self.coordinator.set_control_value("house_load_average_hours", LOAD_PERIOD_TO_HOURS[option])
+        await self.coordinator.async_refresh()
 
 
 class BatterySolarOptimiserSlotOverrideSelect(BatterySolarOptimiserBaseSelect):

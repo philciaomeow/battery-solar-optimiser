@@ -100,8 +100,16 @@ views:
               name: Minimum reserve — recommended 20%
             - entity: number.battery_solar_optimiser_discharge_aggressiveness
               name: Discharge aggressiveness — recommended 60%
-            - entity: number.battery_solar_optimiser_peak_export_power
-              name: Peak export power — recommended 1.0 kW
+            - type: section
+              label: House load averaging
+            - entity: switch.battery_solar_optimiser_use_average_house_load
+              name: Use calculated average house load
+            - entity: select.battery_solar_optimiser_house_load_average_period
+              name: Average period
+            - entity: sensor.battery_solar_optimiser_average_house_load
+              name: Calculated average load
+            - entity: number.battery_solar_optimiser_manual_house_load
+              name: Manual house load — fallback 600 W
             - entity: select.battery_solar_optimiser_action
               name: Recommended action
             - entity: sensor.battery_solar_optimiser_plan
@@ -117,6 +125,8 @@ views:
             {% set p = 'sensor.battery_solar_optimiser_plan' %}
             **Current slot:** {{ state_attr(p, 'current_slot_start_local') }}–{{ state_attr(p, 'current_slot_end_local') }}  
             **Initial battery:** {{ state_attr(p, 'initial_soc_kwh') }} kWh  
+            **Average house load used:** {{ state_attr(p, 'effective_house_load_w') }} W
+            **Average load source:** {{ state_attr(p, 'house_load_entity') or 'manual fallback' }} over {{ state_attr(p, 'house_load_average_period_hours') or 'manual' }}h
             **Total import:** {{ state_attr(p, 'total_import_kwh') }} kWh  
             **Total export:** {{ state_attr(p, 'total_export_kwh') }} kWh  
             **Estimated daily cost:** {{ states('sensor.battery_solar_optimiser_estimated_cost') }} GBP
