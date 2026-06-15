@@ -6,15 +6,15 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
       ...config,
     };
     this.attachShadow({ mode: 'open' });
+    this._selectOpen = false;
   }
 
   set hass(hass) {
     this._hass = hass;
     // Lovelace pushes frequent hass updates. Re-rendering while a native select
     // menu is open closes the dropdown immediately, making overrides almost
-    // impossible to choose. Defer the render until the select loses focus.
-    const active = this.shadowRoot?.activeElement;
-    if (active?.tagName === 'SELECT') return;
+    // impossible to choose. Defer the render until interaction finishes.
+    if (this._selectOpen) return;
     this.render();
   }
 
@@ -134,10 +134,13 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
     `;
 
     this.shadowRoot.querySelectorAll('select[data-slot]').forEach((select) => {
+      select.addEventListener('focus', () => { this._selectOpen = true; });
+      select.addEventListener('blur', () => { this._selectOpen = false; this.render(); });
+      select.addEventListener('mousedown', () => { this._selectOpen = true; });
       select.addEventListener('change', (event) => {
+        this._selectOpen = false;
         this._changeOverride(Number(event.target.dataset.slot), event.target.value);
       });
-      select.addEventListener('blur', () => this.render());
     });
   }
 }

@@ -142,7 +142,7 @@ class BatterySolarOptimiserLoadAveragePeriodSelect(BatterySolarOptimiserBaseSele
             return
         self._attr_current_option = option
         self.coordinator.set_control_value("house_load_average_hours", LOAD_PERIOD_TO_HOURS[option])
-        await self.coordinator.async_refresh()
+        self.coordinator.async_request_refresh()
 
 
 class BatterySolarOptimiserSlotOverrideSelect(BatterySolarOptimiserBaseSelect):
@@ -178,7 +178,7 @@ class BatterySolarOptimiserSlotOverrideSelect(BatterySolarOptimiserBaseSelect):
             return
         self._attr_current_option = option
         self.coordinator.set_slot_override(self.slot_index, _override_to_internal(option))
-        await self.coordinator.async_refresh()
+        self.coordinator.async_request_refresh()
 
     @property
     def extra_state_attributes(self) -> dict[str, str | int | None]:

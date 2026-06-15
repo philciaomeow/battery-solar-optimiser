@@ -59,10 +59,10 @@ class BatterySolarOptimiserUseAverageHouseLoadSwitch(SwitchEntity, RestoreEntity
         """Enable calculated average house load."""
         self.coordinator.set_control_value(CONTROL_USE_AVERAGE_HOUSE_LOAD, 1.0)
         self.async_write_ha_state()
-        await self.coordinator.async_refresh()
+        self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
         """Use manual house load instead."""
         self.coordinator.set_control_value(CONTROL_USE_AVERAGE_HOUSE_LOAD, 0.0)
         self.async_write_ha_state()
-        await self.coordinator.async_refresh()
+        self.coordinator.async_request_refresh()

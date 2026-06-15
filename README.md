@@ -374,6 +374,8 @@ Check the neighbouring future slots and the `number.battery_solar_optimiser_batt
 
 Make sure `/local/bso-plan-card.js` is the latest version and hard-refresh the browser. The card avoids re-rendering while a native override select is open, and overrides are tied to absolute slot start times so expired overrides are removed as the plan rolls forward.
 
+If the override dropdown still flashes closed briefly, the card may be re-rendering before the select reports focus. A hard-refresh should pick up the latest version; the current card sets an interaction flag on focus/mousedown and only re-renders after blur. Interactive control changes also wait 30 seconds before recalculating, so rapid changes (including multiple overrides) coalesce into one refresh.
+
 ### The battery does not discharge as much as expected
 
 The optimiser does not plan export. In self-use mode, discharge is limited by predicted house load. Check:
@@ -436,6 +438,7 @@ node --check www/bso-layout-card.js
 - Time-varying load profiles beyond the current 24/48/72h average.
 - Better solar forecast source adapters.
 - A richer override editor for selecting calendar times directly rather than relative rows.
+- Configurable debounce interval for interactive control changes (currently 30 seconds to avoid dropdowns closing while the user is still choosing).
 - HACS-ready screenshots and richer documentation.
 
 ---

@@ -359,6 +359,7 @@ class BatterySolarOptimiserCoordinator:
         self.entities: list[SensorEntity] = []
         self._listeners = []
         self._refreshing = False
+        self._debounce_refresh_handle: Any | None = None
 
     def _write_entity_states(self) -> None:
         """Push coordinator state to all registered entities."""
@@ -404,6 +405,22 @@ class BatterySolarOptimiserCoordinator:
         if pruned != overrides:
             self.data["slot_overrides"] = pruned
         return active
+
+    def async_request_refresh(self, delay_s: float = 30.0) -> None:
+        """Schedule a debounced recalculation.
+
+        Controls, overrides, and other interactive changes call this instead of
+        async_refresh directly. A short delay prevents the plan from recalculating
+        while a user is still interacting with a dropdown, and allows multiple
+        rapid changes to coalesce into one refresh.
+        """
+        if self._debounce_refresh_handle is not None:
+            self._debounce_refresh_handle.cancel()
+        self._debounce_refresh_handle = async_call_later(self.hass, delay_s, self._debounced_refresh)
+
+    def _debounced_refresh(self, _now: datetime | None = None) -> None:
+        self._debounce_refresh_handle = None
+        self.hass.async_create_task(self.async_refresh())
 
     def set_control_value(self, key: str, value: float) -> None:
         """Store a live tuning control value."""
@@ -659,6 +676,7 @@ class BatterySolarOptimiserCoordinator:
             slot_overrides = self.slot_overrides_for_starts(plan_starts)
             self.plan = build_plan(
                 now=refresh_started,
+                display_timezone=self.display_timezone,
                 agile_rates=agile_rates,
                 solar_forecast=solar_forecast,
                 battery_capacity_kwh=float(cfg.get("battery_capacity_kwh", 5.0)),

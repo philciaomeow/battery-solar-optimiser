@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 @dataclass
@@ -76,6 +77,7 @@ def build_plan(
     lookback_hours: int = 12,
     slot_overrides: dict[int, str] | None = None,
     discharge_aggressiveness: float = 50.0,
+    display_timezone: str = "Europe/London",
 ) -> Plan:
     """Build a charge/discharge plan over the next horizon_slots half-hours.
 
@@ -172,7 +174,6 @@ def build_plan(
     projected_soc = [soc]
     total_import = 0.0
     total_export = 0.0
-    cumulative_cost = 0.0
 
     # First pass: decide what we *want* to do. Normal/cheap slots import house
     # load from grid so battery is kept for genuinely expensive slots. Solar is
@@ -243,6 +244,15 @@ def build_plan(
             smoothed[idx] = action
 
     # Second pass: simulate with actions, enforcing SOC and calculating per-slot costs.
+    # Cumulative cost should follow the local day (midnight to midnight), so it
+    # resets whenever the slot's local date changes. This keeps the projected
+    # daily cost meaningful even though the plan is a rolling window.
+    try:
+        local_tz = ZoneInfo(display_timezone)
+    except ZoneInfoNotFoundError:  # pragma: no cover - tzdata should exist in HA
+        local_tz = timezone.utc
+    cumulative_cost = 0.0
+    last_local_date = None
     for i, slot in enumerate(slots):
         net_load = load_per_slot - slot.solar_kwh
         action = smoothed[i]
@@ -311,6 +321,10 @@ def build_plan(
         slot.import_kwh = round(slot_import, 3)
         slot.export_kwh = round(slot_export, 3)
         slot.slot_cost_gbp = round(slot_import * (slot.price / 100.0), 4)
+        slot_local_date = slot.start.astimezone(local_tz).date()
+        if last_local_date is not None and slot_local_date != last_local_date:
+            cumulative_cost = 0.0
+        last_local_date = slot_local_date
         cumulative_cost += slot.slot_cost_gbp
         slot.cumulative_cost_gbp = round(cumulative_cost, 4)
 

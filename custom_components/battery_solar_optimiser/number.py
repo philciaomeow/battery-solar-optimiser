@@ -81,11 +81,11 @@ class BatterySolarOptimiserBaseNumber(NumberEntity, RestoreEntity):
             self.coordinator.set_control_value(self.control_key, self.recommended_value)
 
     async def async_set_native_value(self, value: float) -> None:
-        """Update a live tuning value and recalculate the plan."""
+        """Update a live tuning value and schedule a debounced recalculation."""
         value = max(float(self._attr_native_min_value), min(float(self._attr_native_max_value), float(value)))
         self.coordinator.set_control_value(self.control_key, value)
         self.async_write_ha_state()
-        await self.coordinator.async_refresh()
+        self.coordinator.async_request_refresh()
 
 
 class BatterySolarOptimiserMinReserveNumber(BatterySolarOptimiserBaseNumber):
