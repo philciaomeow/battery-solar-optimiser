@@ -3,6 +3,7 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
     this.config = {
       entity: 'sensor.battery_solar_optimiser_plan',
       title: '24 hour slot plan',
+      show_overrides: true,
       ...config,
     };
     this.attachShadow({ mode: 'open' });
@@ -14,8 +15,17 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
     // Lovelace pushes frequent hass updates. Re-rendering while a native select
     // menu is open closes the dropdown immediately, making overrides almost
     // impossible to choose. Defer the render until interaction finishes.
-    if (this._selectOpen) return;
+    if (this._anySelectOpen()) return;
     this.render();
+  }
+
+  _anySelectOpen() {
+    if (!this.shadowRoot) return false;
+    const active = this.shadowRoot.activeElement;
+    if (active && active.tagName === 'SELECT') return true;
+    // Mobile browsers don't always keep select focused, so also consider our
+    // own interaction flag set on focus/mousedown.
+    return this._selectOpen;
   }
 
   getCardSize() {
@@ -63,16 +73,18 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
       const override = this._slotOverrideState(index, slot);
       const rowClass = `${slot.is_current ? 'current' : ''} ${this._overrideClass(override)}`.trim();
       const selected = (option) => override === option ? 'selected' : '';
-      return `
-        <tr class="${rowClass}">
-          <td class="time"><strong>${slot.start_local ?? ''}</strong></td>
+      const overrideCell = this.config.show_overrides ? `
           <td class="override-cell">
             <select data-slot="${index}" aria-label="Override slot ${index}">
               <option value="No change" ${selected('No change')}>No change</option>
               <option value="Force charge" ${selected('Force charge')}>Force charge</option>
               <option value="Force discharge" ${selected('Force discharge')}>Force discharge</option>
             </select>
-          </td>
+          </td>` : `<td class="override-badge">${override === 'No change' ? '' : `<span class="badge ${this._overrideClass(override)}">${override}</span>`}</td>`;
+      return `
+        <tr class="${rowClass}">
+          <td class="time"><strong>${slot.start_local ?? ''}</strong></td>
+          ${overrideCell}
           <td><span class="badge ${this._statusClass(slot.action)}">${slot.action ?? 'unknown'}</span></td>
           <td>${Number(slot.price ?? 0).toFixed(1)}p</td>
           <td>${Number(slot.battery_percent ?? 0).toFixed(0)}%</td>
@@ -110,6 +122,7 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
           }
           tr.forced-charge select { border-color: #10b981; }
           tr.forced-discharge select { border-color: #ef4444; }
+          .override-badge { text-align: left; }
           .empty { padding: 16px; color: var(--secondary-text-color); }
         </style>
         ${slots.length ? `
@@ -118,7 +131,7 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
               <thead>
                 <tr>
                   <th>Time</th>
-                  <th>Override</th>
+                  <th>${this.config.show_overrides ? 'Override' : 'Override status'}</th>
                   <th>Status</th>
                   <th>Agile</th>
                   <th>Bat %</th>
@@ -133,15 +146,17 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
       </ha-card>
     `;
 
-    this.shadowRoot.querySelectorAll('select[data-slot]').forEach((select) => {
-      select.addEventListener('focus', () => { this._selectOpen = true; });
-      select.addEventListener('blur', () => { this._selectOpen = false; this.render(); });
-      select.addEventListener('mousedown', () => { this._selectOpen = true; });
-      select.addEventListener('change', (event) => {
-        this._selectOpen = false;
-        this._changeOverride(Number(event.target.dataset.slot), event.target.value);
+    if (this.config.show_overrides) {
+      this.shadowRoot.querySelectorAll('select[data-slot]').forEach((select) => {
+        select.addEventListener('focus', () => { this._selectOpen = true; });
+        select.addEventListener('blur', () => { this._selectOpen = false; this.render(); });
+        select.addEventListener('mousedown', () => { this._selectOpen = true; });
+        select.addEventListener('change', (event) => {
+          this._selectOpen = false;
+          this._changeOverride(Number(event.target.dataset.slot), event.target.value);
+        });
       });
-    });
+    }
   }
 }
 
