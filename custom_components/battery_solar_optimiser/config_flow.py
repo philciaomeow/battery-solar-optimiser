@@ -47,7 +47,14 @@ def _score_entity(entity_id: str, attrs: dict, patterns: tuple[str, ...], key: s
         # Prefer current-day Octopus rates over previous-day
         if "current_day" in entity_id_lower:
             score += 20
-        if "previous_day" in entity_id_lower:
+        if "previous_day" in entity_id_lower or "next_day" in entity_id_lower:
+            score -= 20
+        if attrs.get("rates"):
+            score += 15
+    elif key == "next_day_rates_entity":
+        if "next_day" in entity_id_lower:
+            score += 25
+        if "current_day" in entity_id_lower or "previous_day" in entity_id_lower:
             score -= 20
         if attrs.get("rates"):
             score += 15
@@ -86,8 +93,8 @@ def _score_entity(entity_id: str, attrs: dict, patterns: tuple[str, ...], key: s
 
 def _guess_entities(hass) -> dict[str, str]:
     """Suggest likely entity IDs from existing Home Assistant entities."""
-    best = {"agile_entity": "", "previous_day_rates_entity": "", "solar_forecast_entity": "", "battery_soc_entity": "", "inverter_mode_entity": ""}
-    scores = {"agile_entity": 0, "previous_day_rates_entity": 0, "solar_forecast_entity": 0, "battery_soc_entity": 0, "inverter_mode_entity": 0}
+    best = {"agile_entity": "", "next_day_rates_entity": "", "previous_day_rates_entity": "", "solar_forecast_entity": "", "battery_soc_entity": "", "inverter_mode_entity": ""}
+    scores = {"agile_entity": 0, "next_day_rates_entity": 0, "previous_day_rates_entity": 0, "solar_forecast_entity": 0, "battery_soc_entity": 0, "inverter_mode_entity": 0}
     for state in hass.states.async_all():
         entity_id = state.entity_id
         # Skip non-entity helpers for device matching
@@ -96,6 +103,7 @@ def _guess_entities(hass) -> dict[str, str]:
         attrs = state.attributes
         for key, patterns in (
             ("agile_entity", AGILE_ENTITY_PATTERNS),
+            ("next_day_rates_entity", AGILE_ENTITY_PATTERNS),
             ("previous_day_rates_entity", AGILE_ENTITY_PATTERNS),
             ("solar_forecast_entity", SOLAR_ENTITY_PATTERNS),
             ("battery_soc_entity", BATTERY_SOC_PATTERNS),
@@ -126,6 +134,10 @@ def _schema(
             vol.Required(
                 "agile_entity",
                 default=defaults.get("agile_entity", guesses.get("agile_entity", "")),
+            ): EntitySelector(EntitySelectorConfig(domain=["event", "sensor"])),
+            vol.Optional(
+                "next_day_rates_entity",
+                default=defaults.get("next_day_rates_entity") or guesses.get("next_day_rates_entity"),
             ): EntitySelector(EntitySelectorConfig(domain=["event", "sensor"])),
             vol.Optional(
                 "previous_day_rates_entity",

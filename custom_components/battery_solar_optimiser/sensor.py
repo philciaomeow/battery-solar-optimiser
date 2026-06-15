@@ -82,6 +82,13 @@ def _previous_day_entity_id(entity_id: str) -> str | None:
     return None
 
 
+def _next_day_entity_id(entity_id: str) -> str | None:
+    """Infer Octopus next-day rates entity from current-day rates entity."""
+    if "current_day_rates" in entity_id:
+        return entity_id.replace("current_day_rates", "next_day_rates")
+    return None
+
+
 def _current_slot(plan: Plan, now: datetime):
     """Return the slot containing now, or None."""
     for slot in plan.slots:
@@ -235,9 +242,11 @@ async def async_setup_entry(
 
     # Refresh when the configured source entities become available or change.
     cfg = {**config_entry.data, **config_entry.options}
+    next_day_entity = cfg.get("next_day_rates_entity") or _next_day_entity_id(cfg.get("agile_entity", ""))
     source_entities = [
         cfg.get("agile_entity"),
         cfg.get("previous_day_rates_entity"),
+        next_day_entity,
         cfg.get("solar_forecast_entity"),
         cfg.get("battery_soc_entity"),
     ]
@@ -269,6 +278,7 @@ class BatterySolarOptimiserCoordinator:
         self.plan: Plan | None = None
         self.entities: list[SensorEntity] = []
         self._listeners = []
+        self._refreshing = False
 
     def _write_entity_states(self) -> None:
         """Push coordinator state to all registered entities."""
@@ -317,99 +327,138 @@ class BatterySolarOptimiserCoordinator:
         """Return the timezone used for human-facing plan times."""
         return str(self.cfg.get("display_timezone", "Europe/London"))
 
+    async def _refresh_rate_entities(self, cfg: dict[str, Any]) -> None:
+        """Ask Home Assistant to refresh Octopus rate entities before planning.
+
+        Octopus publishes Agile rates through event entities. The optimiser was
+        previously recalculating from whatever happened to be cached in HA, so a
+        manual/scheduled BSO refresh could still use stale rates. Force-refresh
+        the current, next-day, and previous-day rate entities first; then read
+        their updated attributes for the plan.
+        """
+        agile_entity = cfg.get("agile_entity", "")
+        previous_day_entity = cfg.get("previous_day_rates_entity") or _previous_day_entity_id(agile_entity) or ""
+        next_day_entity = cfg.get("next_day_rates_entity") or _next_day_entity_id(agile_entity) or ""
+        entity_ids = [e for e in dict.fromkeys([agile_entity, next_day_entity, previous_day_entity]) if e]
+        if not entity_ids:
+            return
+        try:
+            await self.hass.services.async_call(
+                "homeassistant",
+                "update_entity",
+                {"entity_id": entity_ids},
+                blocking=True,
+            )
+        except Exception as err:  # pragma: no cover - defensive against HA service failures
+            _LOGGER.warning("Could not refresh Agile rate entities %s: %s", entity_ids, err)
+
     async def async_refresh(self, now: datetime | None = None) -> None:
         """Refresh optimisation plan and push updates to entities."""
+        if self._refreshing:
+            return
+        self._refreshing = True
         cfg = self.cfg
+        soc_entity = cfg.get("battery_soc_entity", "")
         refresh_started = dt_util.utcnow()
         self.data["status"] = "running"
         self._write_entity_states()
-
-        state_api = self.hass.states
-
-        soc_entity = cfg.get("battery_soc_entity", "")
-        soc_state = state_api.get(soc_entity)
         try:
-            if soc_state is None or soc_state.state in (None, "unavailable", "unknown"):
-                current_soc_kwh = cfg.get("min_soc_kwh", 0.0)
-            else:
-                raw_soc = float(soc_state.state)
-                uom = soc_state.attributes.get("unit_of_measurement", "").lower()
-                if uom == "%":
-                    # Convert percentage to kWh using configured battery capacity
-                    current_soc_kwh = raw_soc / 100.0 * cfg.get("battery_capacity_kwh", 5.0)
+            await self._refresh_rate_entities(cfg)
+
+            state_api = self.hass.states
+            soc_state = state_api.get(soc_entity)
+            try:
+                if soc_state is None or soc_state.state in (None, "unavailable", "unknown"):
+                    current_soc_kwh = cfg.get("min_soc_kwh", 0.0)
                 else:
-                    current_soc_kwh = raw_soc
-        except (ValueError, TypeError):
-            current_soc_kwh = cfg.get("min_soc_kwh", 0.0)
+                    raw_soc = float(soc_state.state)
+                    uom = soc_state.attributes.get("unit_of_measurement", "").lower()
+                    if uom == "%":
+                        # Convert percentage to kWh using configured battery capacity
+                        current_soc_kwh = raw_soc / 100.0 * cfg.get("battery_capacity_kwh", 5.0)
+                    else:
+                        current_soc_kwh = raw_soc
+            except (ValueError, TypeError):
+                current_soc_kwh = cfg.get("min_soc_kwh", 0.0)
 
-        agile_entity = cfg.get("agile_entity", "")
-        rates_state = state_api.get(agile_entity)
-        agile_rates = _extract_rates_from_state(rates_state)
+            agile_entity = cfg.get("agile_entity", "")
+            rates_state = state_api.get(agile_entity)
+            agile_rates = _extract_rates_from_state(rates_state)
 
-        previous_day_entity = cfg.get("previous_day_rates_entity") or _previous_day_entity_id(agile_entity) or ""
-        previous_day_rates = _extract_rates_from_state(state_api.get(previous_day_entity))
-        historical_rates = [*previous_day_rates, *agile_rates]
+            next_day_entity = cfg.get("next_day_rates_entity") or _next_day_entity_id(agile_entity) or ""
+            next_day_rates = _extract_rates_from_state(state_api.get(next_day_entity))
+            agile_rates = [*agile_rates, *next_day_rates]
 
-        solar_entity = cfg.get("solar_forecast_entity", "")
-        solar_forecast: list[tuple[datetime, float]] = []
-        solar_state = state_api.get(solar_entity)
-        if solar_state and isinstance(solar_state.attributes.get("forecast"), list):
-            for f in solar_state.attributes["forecast"]:
-                try:
-                    start = _parse_dt(f.get("period_start"))
-                    if start is None:
+            previous_day_entity = cfg.get("previous_day_rates_entity") or _previous_day_entity_id(agile_entity) or ""
+            previous_day_rates = _extract_rates_from_state(state_api.get(previous_day_entity))
+            historical_rates = [*previous_day_rates, *agile_rates]
+
+            solar_entity = cfg.get("solar_forecast_entity", "")
+            solar_forecast: list[tuple[datetime, float]] = []
+            solar_state = state_api.get(solar_entity)
+            if solar_state and isinstance(solar_state.attributes.get("forecast"), list):
+                for f in solar_state.attributes["forecast"]:
+                    try:
+                        start = _parse_dt(f.get("period_start"))
+                        if start is None:
+                            continue
+                        val = float(f.get("pv_estimate", 0)) / 2  # kWh per 30 min
+                        solar_forecast.append((start, val))
+                    except (KeyError, ValueError, TypeError):
                         continue
-                    val = float(f.get("pv_estimate", 0)) / 2  # kWh per 30 min
-                    solar_forecast.append((start, val))
-                except (KeyError, ValueError, TypeError):
-                    continue
 
-        # If no detailed forecast exists, try Forecast.Solar style power/energy
-        # sensors and merge known near-term readings over the generic bell curve.
-        if not solar_forecast:
-            heuristic = _solar_heuristic(refresh_started, float(cfg.get("pv_capacity_kwh", 5.0)))
-            power_sensor_forecast = _solar_from_power_sensors(state_api, solar_entity, refresh_started)
-            if power_sensor_forecast:
-                solar_forecast = [
-                    (slot_start, power_val if power_val > 0 else heuristic[idx][1])
-                    for idx, ((slot_start, power_val), _heuristic_slot) in enumerate(
-                        zip(power_sensor_forecast, heuristic, strict=False)
-                    )
-                ]
-            else:
-                solar_forecast = heuristic
+            # If no detailed forecast exists, try Forecast.Solar style power/energy
+            # sensors and merge known near-term readings over the generic bell curve.
+            if not solar_forecast:
+                heuristic = _solar_heuristic(refresh_started, float(cfg.get("pv_capacity_kwh", 5.0)))
+                power_sensor_forecast = _solar_from_power_sensors(state_api, solar_entity, refresh_started)
+                if power_sensor_forecast:
+                    solar_forecast = [
+                        (slot_start, power_val if power_val > 0 else heuristic[idx][1])
+                        for idx, ((slot_start, power_val), _heuristic_slot) in enumerate(
+                            zip(power_sensor_forecast, heuristic, strict=False)
+                        )
+                    ]
+                else:
+                    solar_forecast = heuristic
 
-        low_soc = current_soc_kwh < float(cfg.get("min_soc_kwh", 0.5))
-        self.plan = build_plan(
-            now=refresh_started,
-            agile_rates=agile_rates,
-            solar_forecast=solar_forecast,
-            battery_capacity_kwh=float(cfg.get("battery_capacity_kwh", 5.0)),
-            min_soc_kwh=float(cfg.get("min_soc_kwh", 0.5)),
-            current_soc_kwh=current_soc_kwh,
-            load_w=float(cfg.get("hourly_load_w", 600)),
-            max_charge_kw=float(cfg.get("max_charge_kw", 3.7)),
-            max_discharge_kw=float(cfg.get("max_discharge_kw", 3.7)),
-            efficiency=float(cfg.get("round_trip_efficiency", 0.95)),
-            missing_rate_pence=float(cfg.get("missing_rate_pence", 30.0)),
-            previous_day_rates=previous_day_rates,
-            historical_rates=historical_rates,
-            lookback_hours=int(float(cfg.get("lookback_hours", 12))),
-            slot_overrides=self.data.get("slot_overrides", {}),
-        )
+            low_soc = current_soc_kwh < float(cfg.get("min_soc_kwh", 0.5))
+            self.plan = build_plan(
+                now=refresh_started,
+                agile_rates=agile_rates,
+                solar_forecast=solar_forecast,
+                battery_capacity_kwh=float(cfg.get("battery_capacity_kwh", 5.0)),
+                min_soc_kwh=float(cfg.get("min_soc_kwh", 0.5)),
+                current_soc_kwh=current_soc_kwh,
+                load_w=float(cfg.get("hourly_load_w", 600)),
+                max_charge_kw=float(cfg.get("max_charge_kw", 3.7)),
+                max_discharge_kw=float(cfg.get("max_discharge_kw", 3.7)),
+                efficiency=float(cfg.get("round_trip_efficiency", 0.95)),
+                missing_rate_pence=float(cfg.get("missing_rate_pence", 30.0)),
+                previous_day_rates=previous_day_rates,
+                historical_rates=historical_rates,
+                lookback_hours=int(float(cfg.get("lookback_hours", 12))),
+                slot_overrides=self.data.get("slot_overrides", {}),
+            )
 
-        source_counts = {"actual": 0, "previous_day": 0, "fallback": 0}
-        if self.plan:
-            for slot in self.plan.slots:
-                source_counts[slot.price_source] = source_counts.get(slot.price_source, 0) + 1
-        self.data["price_source_counts"] = source_counts
-        self.data["previous_day_rates_entity"] = previous_day_entity or None
+            source_counts = {"actual": 0, "previous_day": 0, "fallback": 0}
+            if self.plan:
+                for slot in self.plan.slots:
+                    source_counts[slot.price_source] = source_counts.get(slot.price_source, 0) + 1
+            self.data["price_source_counts"] = source_counts
+            self.data["previous_day_rates_entity"] = previous_day_entity or None
+            self.data["next_day_rates_entity"] = next_day_entity or None
 
-        refresh_finished = dt_util.utcnow()
-        self.data["last_updated"] = refresh_finished
-        self.data["next_update_due"] = self._next_scheduled_refresh(refresh_finished, low_soc)
-        self.data["status"] = "idle"
-        self._write_entity_states()
+            refresh_finished = dt_util.utcnow()
+            self.data["last_updated"] = refresh_finished
+            self.data["next_update_due"] = self._next_scheduled_refresh(refresh_finished, low_soc)
+            self.data["status"] = "idle"
+            self._write_entity_states()
+        finally:
+            if self.data.get("status") == "running":
+                self.data["status"] = "idle"
+                self._write_entity_states()
+            self._refreshing = False
 
         # Schedule regular and low-SOC refreshes once, when first entity is added.
         if not self._listeners:
@@ -427,7 +476,7 @@ class BatterySolarOptimiserCoordinator:
                 soc_state = self.hass.states.get(soc_entity)
                 try:
                     current_soc = float(soc_state.state)
-                except (ValueError, TypeError):
+                except (AttributeError, ValueError, TypeError):
                     return
                 if current_soc < min_soc_kwh:
                     await self.async_refresh()
@@ -439,7 +488,6 @@ class BatterySolarOptimiserCoordinator:
                     timedelta(minutes=5),
                 )
             )
-
 
 class BatterySolarOptimiserBaseSensor(SensorEntity, RestoreEntity):
     """Base sensor."""
@@ -513,6 +561,7 @@ class BatterySolarOptimiserPlanSensor(BatterySolarOptimiserBaseSensor):
             "total_export_kwh": round(plan.total_export_kwh, 3),
             "price_source_counts": self.coordinator.data.get("price_source_counts", {}),
             "previous_day_rates_entity": self.coordinator.data.get("previous_day_rates_entity"),
+            "next_day_rates_entity": self.coordinator.data.get("next_day_rates_entity"),
             "lookback_hours": int(float(self.coordinator.cfg.get("lookback_hours", 12))),
         }
 
