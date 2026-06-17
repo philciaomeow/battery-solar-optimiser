@@ -415,8 +415,24 @@ class BatterySolarOptimiserCoordinator:
         rapid changes to coalesce into one refresh.
         """
         if self._debounce_refresh_handle is not None:
-            self._debounce_refresh_handle.cancel()
+            # Home Assistant's async_call_later returns an unsubscribe/cancel
+            # function, not an object with .cancel(). Calling .cancel() raises
+            # when a second control change tries to replace the pending refresh.
+            self._debounce_refresh_handle()
         self._debounce_refresh_handle = async_call_later(self.hass, delay_s, self._debounced_refresh)
+
+    def _soc_state_to_kwh(self, soc_state, cfg: dict[str, Any], fallback_kwh: float) -> float:
+        """Convert the configured battery SOC entity to kWh."""
+        try:
+            if soc_state is None or soc_state.state in (None, "unavailable", "unknown"):
+                return fallback_kwh
+            raw_soc = float(soc_state.state)
+            uom = str(soc_state.attributes.get("unit_of_measurement", "")).lower()
+            if uom == "%":
+                return raw_soc / 100.0 * float(cfg.get("battery_capacity_kwh", 5.0))
+            return raw_soc
+        except (ValueError, TypeError):
+            return fallback_kwh
 
     def _debounced_refresh(self, _now: datetime | None = None) -> None:
         self._debounce_refresh_handle = None
@@ -618,19 +634,7 @@ class BatterySolarOptimiserCoordinator:
             state_api = self.hass.states
             effective_min_soc_kwh = self._effective_min_soc_kwh(cfg)
             soc_state = state_api.get(soc_entity)
-            try:
-                if soc_state is None or soc_state.state in (None, "unavailable", "unknown"):
-                    current_soc_kwh = effective_min_soc_kwh
-                else:
-                    raw_soc = float(soc_state.state)
-                    uom = soc_state.attributes.get("unit_of_measurement", "").lower()
-                    if uom == "%":
-                        # Convert percentage to kWh using configured battery capacity
-                        current_soc_kwh = raw_soc / 100.0 * cfg.get("battery_capacity_kwh", 5.0)
-                    else:
-                        current_soc_kwh = raw_soc
-            except (ValueError, TypeError):
-                current_soc_kwh = effective_min_soc_kwh
+            current_soc_kwh = self._soc_state_to_kwh(soc_state, cfg, effective_min_soc_kwh)
 
             agile_entity = cfg.get("agile_entity", "")
             rates_state = state_api.get(agile_entity)
@@ -730,11 +734,10 @@ class BatterySolarOptimiserCoordinator:
 
             async def _low_soc_refresh(_now: datetime) -> None:
                 soc_state = self.hass.states.get(soc_entity)
-                try:
-                    current_soc = float(soc_state.state)
-                except (AttributeError, ValueError, TypeError):
-                    return
-                if current_soc < self._effective_min_soc_kwh(self.cfg):
+                cfg = self.cfg
+                effective_min_soc_kwh = self._effective_min_soc_kwh(cfg)
+                current_soc_kwh = self._soc_state_to_kwh(soc_state, cfg, effective_min_soc_kwh)
+                if current_soc_kwh < effective_min_soc_kwh:
                     await self.async_refresh()
 
             self._listeners.append(

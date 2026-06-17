@@ -2,7 +2,9 @@
 
 from datetime import datetime, timedelta, timezone
 
+import custom_components.battery_solar_optimiser.sensor as sensor_module
 from custom_components.battery_solar_optimiser.optimiser import build_plan
+from custom_components.battery_solar_optimiser.sensor import BatterySolarOptimiserCoordinator
 
 
 def _make_rates(base: datetime, n: int = 48, cheap_slot: int = 2) -> list[tuple[datetime, float]]:
@@ -81,7 +83,32 @@ def test_respects_min_soc():
         max_discharge_kw=3.7,
         efficiency=0.95,
     )
-    assert min(plan.projected_soc) >= 0.999
+    assert plan.projected_soc[0] == 0.2
+    assert min(plan.projected_soc[1:]) >= 0.999
+
+
+def test_below_min_soc_charges_to_reserve_instead_of_clamping():
+    now = datetime(2026, 6, 14, 0, 0, tzinfo=timezone.utc)
+    rates = [(now + timedelta(minutes=30 * i), 0.30) for i in range(48)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=2.0,
+        current_soc_kwh=0.5,
+        load_w=600,
+        max_charge_kw=3.7,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+    )
+
+    assert plan.projected_soc[0] == 0.5
+    assert plan.slots[0].action == "charge"
+    assert plan.slots[0].action_kw > 0
+    assert plan.projected_soc[1] >= 2.0
 
 
 def test_aligns_to_half_hour():
@@ -331,6 +358,25 @@ def test_discharge_aggressiveness_increases_discharge_slots():
     aggressive_count = sum(slot.action == "discharge" for slot in aggressive.slots)
     assert aggressive_count >= conservative_count
 
+
+def test_debounced_refresh_cancels_previous_unsubscribe_handle(monkeypatch):
+    cancel_calls = []
+
+    def fake_async_call_later(_hass, _delay, _callback):
+        def cancel():
+            cancel_calls.append("cancelled")
+
+        return cancel
+
+    monkeypatch.setattr(sensor_module, "async_call_later", fake_async_call_later)
+    coordinator = BatterySolarOptimiserCoordinator.__new__(BatterySolarOptimiserCoordinator)
+    coordinator.hass = object()
+    coordinator._debounce_refresh_handle = None
+
+    coordinator.async_request_refresh()
+    coordinator.async_request_refresh()
+
+    assert cancel_calls == ["cancelled"]
 
 
 def test_precharge_waits_for_cheaper_upcoming_slots():

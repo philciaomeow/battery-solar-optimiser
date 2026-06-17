@@ -170,7 +170,11 @@ def build_plan(
     # Agile periods; lower values preserve more battery for only the worst slots.
     expensive_threshold -= ((aggressiveness - 50.0) / 50.0) * min(price_spread * 0.20, 6.0)
 
-    soc = max(current_soc_kwh, min_soc_kwh)
+    # Keep the real current SOC. If it is below the configured reserve, the
+    # simulation below will actively charge back to the reserve. Clamping here
+    # makes the dashboard pretend the battery is already at the reserve and
+    # prevents the live action from switching into charge mode.
+    soc = max(0.0, min(current_soc_kwh, battery_capacity_kwh))
     projected_soc = [soc]
     total_import = 0.0
     total_export = 0.0
@@ -260,9 +264,14 @@ def build_plan(
         slot_import = 0.0
         slot_export = 0.0
 
+        reserve_recovery = soc < min_soc_kwh - 0.05
+        if reserve_recovery:
+            action = "charge"
+
         if action == "charge":
             # Charge battery and cover any household deficit from grid.
-            available = battery_capacity_kwh - soc
+            target_soc = min_soc_kwh if reserve_recovery else battery_capacity_kwh
+            available = max(0.0, target_soc - soc)
             charge = min(
                 available,
                 max_charge_kw * slot_duration_h * efficiency,
@@ -316,7 +325,7 @@ def build_plan(
 
         slot.action = action
         slot.action_kw = round(action_kw, 3)
-        soc = max(min(soc, battery_capacity_kwh), min_soc_kwh)
+        soc = max(0.0, min(soc, battery_capacity_kwh))
 
         slot.import_kwh = round(slot_import, 3)
         slot.export_kwh = round(slot_export, 3)
