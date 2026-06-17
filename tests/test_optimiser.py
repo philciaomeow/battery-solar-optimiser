@@ -139,6 +139,42 @@ def test_low_start_can_still_discharge_after_planned_charge():
     assert any(slot.action == "discharge" for slot in plan.slots[16:20])
 
 
+def test_precharge_uses_cheapest_slots_before_discharge_deadline():
+    now = datetime(2026, 6, 14, 1, 30, tzinfo=timezone.utc)
+    # Live-shaped prices: a cheap-ish midday ramp, then the expensive 16:00 peak.
+    # At 1.5kW the battery can reach full without using the earlier 14-15p slots,
+    # so the optimiser should choose the cheapest slots nearest the deadline.
+    pence = [
+        19.614, 19.351, 18.459, 17.944, 17.934, 17.913, 17.462, 18.575,
+        18.711, 17.861, 19.614, 18.354, 19.005, 16.884, 16.569, 16.790,
+        16.863, 15.393, 15.005, 15.393, 14.416, 15.162, 14.595, 13.713,
+        12.358, 11.665, 11.560, 13.387, 13.986, 30.145, 30.093, 29.673,
+        31.070, 34.828, 35.879, 24.612,
+    ]
+    rates = [(now + timedelta(minutes=30 * i), p / 100.0) for i, p in enumerate(pence)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=1.2,
+        current_soc_kwh=1.2,
+        load_w=600,
+        max_charge_kw=1.5,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        discharge_aggressiveness=100,
+    )
+
+    pre_peak_charge_slots = [idx for idx in range(18, 29) if plan.slots[idx].action == "charge"]
+
+    assert 26 in pre_peak_charge_slots  # 11.56p slot should be used before dearer 14p+ slots.
+    assert 20 not in pre_peak_charge_slots  # 14.416p is avoidable at this charge rate.
+    assert any(slot.action == "discharge" for slot in plan.slots[29:35])
+
+
 def test_aligns_to_half_hour():
     now = datetime(2026, 6, 14, 9, 17, tzinfo=timezone.utc)
     rates = [(now + timedelta(minutes=30 * i), 0.15) for i in range(48)]

@@ -242,6 +242,69 @@ def build_plan(
         if curr_a != prev_a and curr_a != next_a:
             smoothed[i] = prev_a
 
+    def _soc_after_slot(soc_value: float, slot: Slot, action: str) -> float:
+        """Approximate SOC movement for pre-discharge charge scheduling."""
+        net_load = load_per_slot - slot.solar_kwh
+        if soc_value < min_soc_kwh - 0.05:
+            target_soc = min_soc_kwh
+            available = max(0.0, target_soc - soc_value)
+            charge = min(available, max_charge_kw * slot_duration_h * efficiency)
+            return max(0.0, min(battery_capacity_kwh, soc_value + charge))
+        if action == "charge":
+            available = max(0.0, battery_capacity_kwh - soc_value)
+            charge = min(available, max_charge_kw * slot_duration_h * efficiency)
+            return max(0.0, min(battery_capacity_kwh, soc_value + charge))
+        if net_load <= 0:
+            available = max(0.0, battery_capacity_kwh - soc_value)
+            charge = min(available, -net_load)
+            return max(0.0, min(battery_capacity_kwh, soc_value + charge))
+        return max(0.0, min(battery_capacity_kwh, soc_value))
+
+    def _optimise_pre_discharge_charging(planned: list[str]) -> list[str]:
+        """Move discretionary pre-peak charging into the cheapest slots.
+
+        The first pass marks cheap slots greedily. When charge rate is high enough,
+        that can start charging earlier than needed and skip later/cheaper slots
+        because the battery is already full. For the first upcoming discharge
+        window, rebuild the discretionary charge set by selecting the cheapest
+        slots before the deadline, breaking near-ties toward later slots.
+        """
+        try:
+            deadline = next(idx for idx, action in enumerate(planned) if action == "discharge")
+        except StopIteration:
+            return planned
+        if deadline <= 0:
+            return planned
+
+        optimised = planned[:]
+        candidates: list[int] = []
+        for idx in range(deadline):
+            net_load = load_per_slot - slots[idx].solar_kwh
+            if optimised[idx] == "charge" and net_load > 0:
+                optimised[idx] = "hold"
+            if net_load > 0 and slots[idx].price < expensive_threshold:
+                candidates.append(idx)
+
+        soc_without_discretionary = soc
+        for idx in range(deadline):
+            soc_without_discretionary = _soc_after_slot(soc_without_discretionary, slots[idx], optimised[idx])
+
+        needed = max(0.0, battery_capacity_kwh - soc_without_discretionary)
+        if needed <= 0.05:
+            return optimised
+
+        selected: set[int] = set()
+        for idx in sorted(candidates, key=lambda i: (slots[i].price, -i)):
+            selected.add(idx)
+            needed -= max_charge_kw * slot_duration_h * efficiency
+            if needed <= 0.05:
+                break
+        for idx in selected:
+            optimised[idx] = "charge"
+        return optimised
+
+    smoothed = _optimise_pre_discharge_charging(smoothed)
+
     # Manual overrides win over the automatic recommendation and are applied
     # before simulation so projected SOC, costs, and the live action select all
     # reflect what will be sent to the inverter automation.
