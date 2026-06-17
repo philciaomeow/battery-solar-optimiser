@@ -288,21 +288,32 @@ def build_plan(
             smoothed[i] = prev_a
 
     def _soc_after_slot(soc_value: float, slot: Slot, action: str) -> float:
-        """Approximate SOC movement for pre-discharge charge scheduling."""
+        """Approximate SOC movement for pre-discharge charge scheduling.
+
+        Unlike the original helper, this subtracts household load during hold/
+        discharge slots so the optimiser does not over-estimate how much energy
+        remains at the peak window from early charges.
+        """
         net_load = load_per_slot - slot.solar_kwh
         if soc_value < min_soc_kwh - 0.05:
             target_soc = min_soc_kwh
             available = max(0.0, target_soc - soc_value)
             charge = min(available, max_charge_kw * slot_duration_h * efficiency)
-            return max(0.0, min(battery_capacity_kwh, soc_value + charge))
+            soc_value += charge
         if action == "charge":
             available = max(0.0, battery_capacity_kwh - soc_value)
             charge = min(available, max_charge_kw * slot_duration_h * efficiency)
-            return max(0.0, min(battery_capacity_kwh, soc_value + charge))
+            soc_value += charge
+        # Soak excess solar into the battery regardless of planned action.
         if net_load <= 0:
             available = max(0.0, battery_capacity_kwh - soc_value)
-            charge = min(available, -net_load)
-            return max(0.0, min(battery_capacity_kwh, soc_value + charge))
+            charge = min(available, -net_load, max_charge_kw * slot_duration_h * efficiency)
+            if charge > 0.001:
+                soc_value += charge
+        else:
+            # Household load drains the battery during hold/discharge slots.
+            drain = net_load if action != "discharge" else 0.0
+            soc_value = max(min_soc_kwh, soc_value - drain)
         return max(0.0, min(battery_capacity_kwh, soc_value))
 
     def _optimise_pre_discharge_charging(planned: list[str]) -> list[str]:
@@ -313,6 +324,10 @@ def build_plan(
         because the battery is already full. For the first upcoming discharge
         window, rebuild the discretionary charge set by selecting the cheapest
         slots before the deadline, breaking near-ties toward later slots.
+
+        We only consider slots within a few hours of the deadline so energy is not
+        wasted to household load long before the peak, and the SOC helper above
+        accounts for that load.
         """
         try:
             deadline = next(
@@ -326,8 +341,11 @@ def build_plan(
             return planned
 
         optimised = planned[:]
+        # Only pre-charge in the window immediately before the expensive block.
+        # Charging much earlier wastes energy to household load.
+        pre_charge_horizon = 12  # 6 hours
         candidates: list[int] = []
-        for idx in range(deadline):
+        for idx in range(max(0, deadline - pre_charge_horizon), deadline):
             net_load = load_per_slot - slots[idx].solar_kwh
             recent_local_prices = [slots[j].price for j in range(max(0, idx - 2), idx + 1)]
             near_future_prices = [slots[j].price for j in range(idx + 1, min(idx + 4, len(slots)))]

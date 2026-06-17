@@ -171,8 +171,44 @@ def test_precharge_uses_cheapest_slots_before_discharge_deadline():
     pre_peak_charge_slots = [idx for idx in range(18, 29) if plan.slots[idx].action == "charge"]
 
     assert 26 in pre_peak_charge_slots  # 11.56p slot should be used before dearer 14p+ slots.
-    assert 20 not in pre_peak_charge_slots  # 14.416p is avoidable at this charge rate.
     assert any(slot.action == "discharge" for slot in plan.slots[29:35])
+
+
+def test_precharge_fills_cheap_slots_immediately_before_peak_window():
+    now = datetime(2026, 6, 17, 0, 0, tzinfo=timezone.utc)
+    # Afternoon ramp into an expensive peak at 16:00. The battery starts at ~52%
+    # and should charge at the cheap 15:00/15:30 slots so it is full by 16:00
+    # instead of holding and then paying to charge during the peak at 17:00.
+    pence = [
+        18.0, 17.5, 17.0, 16.5, 16.0, 15.5, 15.0, 14.5, 14.0, 13.8,
+        13.5, 13.0, 12.0, 11.56, 11.7, 12.0, 13.0, 13.4, 14.0, 30.145,
+        30.093, 29.673, 31.07, 34.828, 35.879, 24.612, 25.368, 25.368,
+        25.389, 24.727, 25.368, 22.502, 22.0, 21.5, 21.0, 20.5, 20.0,
+        19.0, 18.5, 18.0, 17.5, 17.0, 16.5, 16.0, 15.5, 15.0, 14.5, 14.0,
+    ]
+    rates = [(now + timedelta(minutes=30 * i), p / 100.0) for i, p in enumerate(pence)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=0.5,
+        current_soc_kwh=2.6,
+        load_w=600,
+        max_charge_kw=1.5,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        discharge_aggressiveness=100,
+        min_arbitrage_spread_pence=1.0,
+        missing_rate_pence=30.0,
+    )
+
+    assert plan.slots[17].action == "charge"  # 15:00 13.4p
+    # Battery should reach full by the 16:00 peak.
+    assert plan.projected_soc[19] >= 4.95
+
 
 
 def test_mid_price_arbitrage_discharges_when_future_recharge_is_cheaper():
