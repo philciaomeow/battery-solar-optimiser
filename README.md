@@ -31,7 +31,7 @@ It is designed for people who want something simpler and easier to reason about 
 - Handles negative Agile prices and will recharge during cheap/negative post-peak periods when there is battery capacity available.
 - Uses self-use discharge planning: battery discharge is limited to household demand and does not intentionally export energy.
 - Calculates average house load from recent Home Assistant recorder history, with selectable 24/48/72 hour windows and a manual fallback.
-- Exposes live tuning controls for minimum reserve, discharge aggressiveness, battery charge rate, and house-load averaging.
+- Exposes live tuning controls for minimum reserve, discharge aggressiveness, battery charge rate, minimum arbitrage spread, and house-load averaging.
 - Reads battery SOC as either `%` or `kWh`.
 - Protects a configurable minimum SOC.
 - Refreshes shortly before Agile slot changes.
@@ -58,8 +58,22 @@ It is designed for people who want something simpler and easier to reason about 
 | `number.battery_solar_optimiser_minimum_reserve` | Number | Live minimum reserve percentage. |
 | `number.battery_solar_optimiser_discharge_aggressiveness` | Number | Live tuning for how readily the optimiser discharges during moderately high prices. |
 | `number.battery_solar_optimiser_battery_charge_rate` | Number | Live maximum battery charge rate in kW used by the plan. |
+| `number.battery_solar_optimiser_minimum_arbitrage_spread` | Number | Minimum price gap, in p/kWh, required before mid-price charge/discharge cycling is worth doing. |
 | `number.battery_solar_optimiser_manual_house_load` | Number | Manual house-load fallback in watts. |
 | `button.battery_solar_optimiser_recalculate` | Button | Manually refreshes the plan immediately. |
+
+### Mid-price arbitrage and peak protection
+
+`number.battery_solar_optimiser_minimum_arbitrage_spread` controls how much price difference is needed before the optimiser deliberately cycles the battery between nearby slots. For example, with a `1p/kWh` spread it may charge at `17.5p` and discharge at `18.7p`; with a higher spread it will ignore small savings and hold more often.
+
+The optimiser also has a separate peak-price guard. Slots in the genuine expensive peak band are treated as battery-use slots, not charge slots:
+
+- automatic charging is blocked inside the peak band
+- manual charge overrides inside the peak band are ignored for safety
+- blocked peak charges are converted to `discharging`; the chronological simulation then reports `hold` only if there is no usable battery above reserve
+- flat-price days skip the peak guard because there is no meaningful peak band
+
+This means the optimiser should charge before the peak, discharge at the dear slot, and hold later cheaper slots when battery is limited.
 
 ### Slot override entities
 
@@ -330,12 +344,15 @@ The core optimiser is intentionally simple and deterministic:
 4. Use solar to cover load first, then charge the battery where possible.
 5. Protect the configured minimum SOC.
 6. Charge during cheap slots, especially before expensive periods or during negative prices.
-7. Discharge during expensive slots when there is usable battery above reserve.
-8. Hold during normal/flat periods to avoid needless battery cycling.
-9. Prefer the cheapest upcoming slots for grid charging rather than charging early at merely average rates.
-10. Limit planned discharge to predicted household demand in self-use mode; it does not intentionally export battery energy.
-11. Apply any manual slot overrides.
-12. Simulate projected SOC and cost from the resulting actions.
+7. Use load-aware pre-peak scheduling: simulate household load drain, then choose enough cheap slots in the few hours before the expensive block to arrive with usable SOC.
+8. Use the minimum arbitrage spread control to decide whether small local price differences are worth cycling the battery.
+9. Discharge during expensive slots when there is usable battery above reserve.
+10. Block charging inside the genuine peak band; blocked peak charges become discharge requests, with the simulation falling back to hold only if reserve/capacity prevents discharge.
+11. Hold during normal/flat periods to avoid needless battery cycling.
+12. Prefer the cheapest upcoming slots for grid charging rather than charging early at merely average rates.
+13. Limit planned discharge to predicted household demand in self-use mode; it does not intentionally export battery energy.
+14. Apply any manual slot overrides, except unsafe charge overrides inside the peak band.
+15. Simulate projected SOC and cost from the resulting actions.
 
 It is not a mathematical optimiser and does not use an LP/MILP solver. That is deliberate: the aim is a transparent, dependency-light controller that is easy to understand and debug.
 
@@ -361,7 +378,9 @@ The plan attributes include price source counts. If many slots use fallback, che
 
 ### The plan charges on a rate that looks too high
 
-Check the neighbouring future slots and the `number.battery_solar_optimiser_battery_charge_rate` value. The optimiser now prefers the cheapest upcoming charge slots and reports `hold` when the battery is already full rather than showing a misleading zero-power charge. If the physical inverter charges slower than the configured value, lower the battery charge-rate number so the plan allocates enough cheap slots to finish charging.
+Check the neighbouring future slots and the `number.battery_solar_optimiser_battery_charge_rate` value. The optimiser prefers the cheapest upcoming charge slots, accounts for household load drain before peaks, and reports `hold` when the battery is already full rather than showing a misleading zero-power charge. If the physical inverter charges slower than the configured value, lower the battery charge-rate number so the plan allocates enough cheap slots to finish charging.
+
+The optimiser should not intentionally charge inside the genuine expensive peak band. If a peak slot was briefly selected as charge while preparing for a later dearer slot, the final guard converts it to `discharging`; the simulation only shows `hold` if there is no usable battery above reserve.
 
 ### Override dropdown closes immediately or an override sticks after rollover
 
@@ -398,6 +417,32 @@ charging / discharging / hold
 ```
 
 to your inverter's own select, switch, number, or service calls.
+
+---
+
+## Recent release notes
+
+### v0.3.16
+
+- Peak-band charge guards now convert blocked peak charge actions to `discharging`, not passive `hold`.
+- The chronological simulation still falls back to `hold` if the battery is at reserve or otherwise cannot discharge.
+- This fixes cases where a high slot held even though a cheaper slot existed later and usable battery was available.
+
+### v0.3.15
+
+- Added a hard peak-band guard so the optimiser never intentionally buys peak-rate electricity to charge the battery.
+- Manual charge overrides inside the peak band are ignored for safety; discharge overrides remain allowed.
+- Flat-price plans skip the guard because there is no meaningful peak.
+
+### v0.3.14
+
+- Made pre-peak charge planning load-aware, so household load between charge slots and the peak is included in the SOC estimate.
+- Restricted pre-peak charge candidate slots to the few hours before the expensive block to avoid charging too early and draining through normal load.
+
+### v0.3.12–v0.3.13
+
+- Added the `Minimum Arbitrage Spread` control for user-tunable mid-price cycling.
+- Added rolling local arbitrage so low spread settings can charge at a local dip and discharge at nearby dearer slots.
 
 ---
 
