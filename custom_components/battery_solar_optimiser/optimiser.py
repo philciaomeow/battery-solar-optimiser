@@ -222,39 +222,56 @@ def build_plan(
             # back into hold if the battery is already full.
             action = "charge"
             is_forced = True
-        elif (
-            arbitrage_enabled
-            and min_arbitrage_spread > 0
-            and min_future_price <= slot.price - min_arbitrage_spread
-            and slot.price >= max(0.0, min_arbitrage_spread)
-        ):
-            # Mid-price arbitrage: discharge at a moderately expensive price if
-            # a cheaper recharge slot is visible soon. This catches cases like
-            # 19p now vs 15p later without needing to classify 19p as a peak.
-            action = "discharge"
-            is_forced = True
-        elif arbitrage_enabled and future_expensive and current_is_discounted and slot.price < expensive_threshold:
-            # Charge/prepare before later expensive slots if the spread beats
-            # round-trip loss, but do not start charging at a merely okay price
-            # when clearly cheaper slots are still available before the next
-            # expensive block.
-            profitable_future = max_future_price > (slot.price / max(efficiency, 0.01)) + 2.0
-            near_best_upcoming_price = slot.price <= min_future_price + 0.5
-            if profitable_future and near_best_upcoming_price:
+        else:
+            recent_local_prices = [slots[j].price for j in range(max(0, i - 2), i + 1)]
+            near_future_prices = [slots[j].price for j in range(i + 1, min(i + 4, len(slots)))]
+            local_recharge_before_higher_slot = (
+                arbitrage_enabled
+                and min_arbitrage_spread > 0
+                and near_future_prices
+                and slot.price <= min(recent_local_prices) + 0.05
+                and max(near_future_prices) >= slot.price + min_arbitrage_spread
+            )
+            if local_recharge_before_higher_slot:
+                # Rolling local arbitrage: when the current slot is a local dip
+                # and a higher slot is imminent, charge first so the later slot
+                # has usable battery to discharge. This catches 17.5p -> 18.7p
+                # and 17.9p -> 19.6p style opportunities controlled by spread.
                 action = "charge"
                 is_forced = True
-        elif arbitrage_enabled and slot.price >= expensive_threshold:
-            # Discharge during expensive slots. Do not require the first-pass SOC
-            # estimate to be above reserve: earlier planned charge/solar may fill
-            # the battery before this slot. The simulation pass enforces the real
-            # reserve and reports hold if there is not actually usable energy.
-            if (
-                slot.price > avg_future_price
-                or slot.price >= missing_rate_pence
-                or slot.price >= cheap_threshold + 3.0
+            elif (
+                arbitrage_enabled
+                and min_arbitrage_spread > 0
+                and min_future_price <= slot.price - min_arbitrage_spread
+                and slot.price >= max(0.0, min_arbitrage_spread)
             ):
+                # Mid-price arbitrage: discharge at a moderately expensive price if
+                # a cheaper recharge slot is visible soon. This catches cases like
+                # 19p now vs 15p later without needing to classify 19p as a peak.
                 action = "discharge"
                 is_forced = True
+            elif arbitrage_enabled and future_expensive and current_is_discounted and slot.price < expensive_threshold:
+                # Charge/prepare before later expensive slots if the spread beats
+                # round-trip loss, but do not start charging at a merely okay price
+                # when clearly cheaper slots are still available before the next
+                # expensive block.
+                profitable_future = max_future_price > (slot.price / max(efficiency, 0.01)) + 2.0
+                near_best_upcoming_price = slot.price <= min_future_price + 0.5
+                if profitable_future and near_best_upcoming_price:
+                    action = "charge"
+                    is_forced = True
+            elif arbitrage_enabled and slot.price >= expensive_threshold:
+                # Discharge during expensive slots. Do not require the first-pass SOC
+                # estimate to be above reserve: earlier planned charge/solar may fill
+                # the battery before this slot. The simulation pass enforces the real
+                # reserve and reports hold if there is not actually usable energy.
+                if (
+                    slot.price > avg_future_price
+                    or slot.price >= missing_rate_pence
+                    or slot.price >= cheap_threshold + 3.0
+                ):
+                    action = "discharge"
+                    is_forced = True
 
         actions.append(action)
         forced.append(is_forced)
@@ -312,7 +329,16 @@ def build_plan(
         candidates: list[int] = []
         for idx in range(deadline):
             net_load = load_per_slot - slots[idx].solar_kwh
-            if optimised[idx] == "charge" and net_load > 0:
+            recent_local_prices = [slots[j].price for j in range(max(0, idx - 2), idx + 1)]
+            near_future_prices = [slots[j].price for j in range(idx + 1, min(idx + 4, len(slots)))]
+            preserve_local_arbitrage_charge = (
+                planned[idx] == "charge"
+                and min_arbitrage_spread > 0
+                and near_future_prices
+                and slots[idx].price <= min(recent_local_prices) + 0.05
+                and max(near_future_prices) >= slots[idx].price + min_arbitrage_spread
+            )
+            if optimised[idx] == "charge" and net_load > 0 and not preserve_local_arbitrage_charge:
                 optimised[idx] = "hold"
             if net_load > 0 and slots[idx].price < expensive_threshold:
                 candidates.append(idx)

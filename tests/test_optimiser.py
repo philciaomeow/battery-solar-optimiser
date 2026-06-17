@@ -224,6 +224,34 @@ def test_mid_price_arbitrage_respects_spread_setting():
     assert plan.slots[1].action == "hold"
 
 
+def test_rolling_local_arbitrage_charges_before_nearby_higher_slots():
+    now = datetime(2026, 6, 14, 4, 30, tzinfo=timezone.utc)
+    pence = [17.5, 18.6, 18.7, 17.9, 19.6, 18.3, 19.0, 16.9]
+    rates = [(now + timedelta(minutes=30 * i), p / 100.0) for i, p in enumerate(pence)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=0.5,
+        current_soc_kwh=0.5,
+        load_w=600,
+        max_charge_kw=1.5,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        discharge_aggressiveness=100,
+        min_arbitrage_spread_pence=1.0,
+    )
+
+    assert plan.slots[0].action == "charge"  # 17.5p before 18.6/18.7p
+    assert plan.slots[1].action == "discharge"
+    assert plan.slots[2].action == "discharge"
+    assert plan.slots[3].action == "charge"  # 17.9p before 19.6p
+    assert plan.slots[4].action == "discharge"
+
+
 def test_aligns_to_half_hour():
     now = datetime(2026, 6, 14, 9, 17, tzinfo=timezone.utc)
     rates = [(now + timedelta(minutes=30 * i), 0.15) for i in range(48)]
