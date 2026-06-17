@@ -245,6 +245,7 @@ def test_no_charge_slots_inside_expensive_peak_window():
     peak_window = [idx for idx, slot in enumerate(plan.slots) if slot.price >= 25.0]
     assert peak_window
     assert all(plan.slots[idx].action != "charge" for idx in peak_window)
+    assert plan.slots[21].action == "discharge"  # 17:00 29.673p should not become hold/charge.
 
 
 def test_mid_price_arbitrage_discharges_when_future_recharge_is_cheaper():

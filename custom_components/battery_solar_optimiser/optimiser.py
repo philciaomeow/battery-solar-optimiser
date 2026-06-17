@@ -388,7 +388,7 @@ def build_plan(
         # power to charge.
         for idx in range(deadline, min(deadline + pre_charge_horizon, len(slots))):
             if slots[idx].price >= expensive_threshold and optimised[idx] == "charge":
-                optimised[idx] = "hold"
+                optimised[idx] = "discharge"
         return optimised
 
     smoothed = _optimise_pre_discharge_charging(smoothed)
@@ -412,11 +412,13 @@ def build_plan(
                 smoothed[idx] = action
 
     # Final hard guard: any remaining planned charge inside the peak band is
-    # demoted to hold.
+    # converted to discharge. The chronological simulation will report hold if
+    # reserve/capacity means there is no usable battery, but the optimiser should
+    # always try to use battery at the dear slot rather than buy peak-rate power.
     if price_spread >= 0.01:
         for i, slot in enumerate(slots):
             if smoothed[i] == "charge" and slot.price >= expensive_peak_price:
-                smoothed[i] = "hold"
+                smoothed[i] = "discharge"
 
     # Second pass: simulate with actions, enforcing SOC and calculating per-slot costs.
     # Cumulative cost should follow the local day (midnight to midnight), so it
