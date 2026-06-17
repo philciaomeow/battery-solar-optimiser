@@ -204,7 +204,11 @@ def build_plan(
         if net_load <= 0 and soc < battery_capacity_kwh - 0.05:
             # Excess solar: charge even if energy price is uninteresting.
             action = "charge"
-        elif arbitrage_enabled and slot.price <= cheap_threshold and slot.price < expensive_threshold:
+        elif (
+            arbitrage_enabled
+            and slot.price <= cheap_threshold
+            and slot.price < expensive_threshold
+        ):
             # Recharge in genuinely cheap/negative slots, even if they happen
             # after the peak discharge period rather than before it.
             action = "charge"
@@ -244,6 +248,7 @@ def build_plan(
                 and min_arbitrage_spread > 0
                 and min_future_price <= slot.price - min_arbitrage_spread
                 and slot.price >= max(0.0, min_arbitrage_spread)
+                and slot.price < expensive_threshold
             ):
                 # Mid-price arbitrage: discharge at a moderately expensive price if
                 # a cheaper recharge slot is visible soon. This catches cases like
@@ -377,6 +382,13 @@ def build_plan(
                 break
         for idx in selected:
             optimised[idx] = "charge"
+        # Hard guard: do not allow the pre-peak optimiser to schedule a charge
+        # inside the expensive window itself. A slot that is already part of the
+        # peak should discharge (or hold if battery is empty), never import grid
+        # power to charge.
+        for idx in range(deadline, min(deadline + pre_charge_horizon, len(slots))):
+            if slots[idx].price >= expensive_threshold and optimised[idx] == "charge":
+                optimised[idx] = "hold"
         return optimised
 
     smoothed = _optimise_pre_discharge_charging(smoothed)
@@ -384,9 +396,27 @@ def build_plan(
     # Manual overrides win over the automatic recommendation and are applied
     # before simulation so projected SOC, costs, and the live action select all
     # reflect what will be sent to the inverter automation.
+    # Charge overrides are blocked inside the peak-price band so a user cannot
+    # accidentally buy expensive electricity to charge the battery.
+    # When all prices are flat there is no meaningful peak band, so honour the
+    # override unconditionally.
+    if price_spread < 0.01:
+        expensive_peak_price = float("inf")
+    else:
+        expensive_peak_price = cheap_threshold + price_spread * 0.75
     for idx, action in (slot_overrides or {}).items():
-        if 0 <= idx < len(smoothed) and action in ("charge", "discharge"):
-            smoothed[idx] = action
+        if 0 <= idx < len(smoothed):
+            if action == "discharge":
+                smoothed[idx] = action
+            elif action == "charge" and slots[idx].price <= expensive_peak_price:
+                smoothed[idx] = action
+
+    # Final hard guard: any remaining planned charge inside the peak band is
+    # demoted to hold.
+    if price_spread >= 0.01:
+        for i, slot in enumerate(slots):
+            if smoothed[i] == "charge" and slot.price >= expensive_peak_price:
+                smoothed[i] = "hold"
 
     # Second pass: simulate with actions, enforcing SOC and calculating per-slot costs.
     # Cumulative cost should follow the local day (midnight to midnight), so it

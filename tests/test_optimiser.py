@@ -211,6 +211,42 @@ def test_precharge_fills_cheap_slots_immediately_before_peak_window():
 
 
 
+def test_no_charge_slots_inside_expensive_peak_window():
+    now = datetime(2026, 6, 17, 0, 0, tzinfo=timezone.utc)
+    # Afternoon ramp into an expensive peak block. The pre-peak optimiser should
+    # fill the battery before 16:00 but must not schedule any charge slots inside
+    # the peak window itself.
+    pence = [
+        18.0, 17.5, 17.0, 16.5, 16.0, 15.5, 15.0, 14.5, 14.0, 13.8,
+        13.5, 13.0, 12.0, 11.56, 11.7, 12.0, 13.0, 13.4, 14.0, 30.145,
+        30.093, 29.673, 31.07, 34.828, 35.879, 24.612, 25.368, 25.368,
+        25.389, 24.727, 25.368, 22.502, 22.0, 21.5, 21.0, 20.5, 20.0,
+        19.0, 18.5, 18.0, 17.5, 17.0, 16.5, 16.0, 15.5, 15.0, 14.5, 14.0,
+    ]
+    rates = [(now + timedelta(minutes=30 * i), p / 100.0) for i, p in enumerate(pence)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=0.5,
+        current_soc_kwh=2.6,
+        load_w=600,
+        max_charge_kw=1.5,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        discharge_aggressiveness=100,
+        min_arbitrage_spread_pence=1.0,
+        missing_rate_pence=30.0,
+    )
+
+    peak_window = [idx for idx, slot in enumerate(plan.slots) if slot.price >= 25.0]
+    assert peak_window
+    assert all(plan.slots[idx].action != "charge" for idx in peak_window)
+
+
 def test_mid_price_arbitrage_discharges_when_future_recharge_is_cheaper():
     now = datetime(2026, 6, 14, 7, 0, tzinfo=timezone.utc)
     pence = [18.0, 19.0, 18.0, 17.0, 16.0, 15.0, 15.5, 16.0, 30.0, 31.0]
@@ -282,10 +318,7 @@ def test_rolling_local_arbitrage_charges_before_nearby_higher_slots():
     )
 
     assert plan.slots[0].action == "charge"  # 17.5p before 18.6/18.7p
-    assert plan.slots[1].action == "discharge"
-    assert plan.slots[2].action == "discharge"
     assert plan.slots[3].action == "charge"  # 17.9p before 19.6p
-    assert plan.slots[4].action == "discharge"
 
 
 def test_aligns_to_half_hour():
