@@ -111,6 +111,34 @@ def test_below_min_soc_charges_to_reserve_instead_of_clamping():
     assert plan.projected_soc[1] >= 2.0
 
 
+def test_low_start_can_still_discharge_after_planned_charge():
+    now = datetime(2026, 6, 14, 1, 30, tzinfo=timezone.utc)
+    pence = [
+        19, 18, 17, 17, 18, 18, 19, 18,
+        16, 15, 14, 15, 13, 12, 12, 13,
+        30, 31, 35, 36, 25, 24, 22, 20,
+    ]
+    rates = [(now + timedelta(minutes=30 * i), p / 100.0) for i, p in enumerate(pence)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=1.2,
+        current_soc_kwh=1.05,
+        load_w=600,
+        max_charge_kw=1.0,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        discharge_aggressiveness=100,
+    )
+
+    assert any(slot.action == "charge" for slot in plan.slots[:16])
+    assert any(slot.action == "discharge" for slot in plan.slots[16:20])
+
+
 def test_aligns_to_half_hour():
     now = datetime(2026, 6, 14, 9, 17, tzinfo=timezone.utc)
     rates = [(now + timedelta(minutes=30 * i), 0.15) for i in range(48)]

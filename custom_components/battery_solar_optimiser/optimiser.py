@@ -215,9 +215,11 @@ def build_plan(
             if profitable_future and near_best_upcoming_price:
                 action = "charge"
                 is_forced = True
-        elif arbitrage_enabled and slot.price >= expensive_threshold and soc > min_soc_kwh + 0.05:
-            # Discharge during expensive slots. Do not require a cheaper future slot;
-            # the point is to avoid buying now when the battery already has energy.
+        elif arbitrage_enabled and slot.price >= expensive_threshold:
+            # Discharge during expensive slots. Do not require the first-pass SOC
+            # estimate to be above reserve: earlier planned charge/solar may fill
+            # the battery before this slot. The simulation pass enforces the real
+            # reserve and reports hold if there is not actually usable energy.
             if (
                 slot.price > avg_future_price
                 or slot.price >= missing_rate_pence
