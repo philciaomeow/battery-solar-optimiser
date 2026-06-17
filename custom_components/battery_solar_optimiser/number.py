@@ -15,6 +15,7 @@ from .sensor import BatterySolarOptimiserCoordinator
 CONTROL_MIN_RESERVE_PERCENT = "min_reserve_percent"
 CONTROL_DISCHARGE_AGGRESSIVENESS = "discharge_aggressiveness"
 CONTROL_CHARGE_RATE_KW = "charge_rate_kw"
+CONTROL_MIN_ARBITRAGE_SPREAD_PENCE = "min_arbitrage_spread_pence"
 CONTROL_MANUAL_HOUSE_LOAD_W = "manual_house_load_w"
 
 
@@ -29,6 +30,7 @@ async def async_setup_entry(
         BatterySolarOptimiserMinReserveNumber(coordinator),
         BatterySolarOptimiserDischargeAggressivenessNumber(coordinator),
         BatterySolarOptimiserChargeRateNumber(coordinator),
+        BatterySolarOptimiserMinArbitrageSpreadNumber(coordinator),
         BatterySolarOptimiserManualHouseLoadNumber(coordinator),
     ]
     coordinator.entities.extend(entities)
@@ -145,6 +147,30 @@ class BatterySolarOptimiserChargeRateNumber(BatterySolarOptimiserBaseNumber):
     @property
     def recommended_display(self) -> str:
         return f"{self.recommended_value:g} kW"
+
+
+class BatterySolarOptimiserMinArbitrageSpreadNumber(BatterySolarOptimiserBaseNumber):
+    """Minimum tariff spread before cycling battery for mid-price arbitrage."""
+
+    control_key = CONTROL_MIN_ARBITRAGE_SPREAD_PENCE
+    recommended_value = 3.0
+    description = "Minimum price gap needed to discharge now and recharge later. Lower catches more small savings; higher reduces cycling."
+    _attr_name = "Minimum Arbitrage Spread"
+    _attr_icon = "mdi:swap-vertical-bold"
+    _attr_device_class = None
+    _attr_native_unit_of_measurement = "p/kWh"
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 20.0
+    _attr_native_step = 0.5
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, coordinator: BatterySolarOptimiserCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_minimum_arbitrage_spread_pence"
+
+    @property
+    def recommended_display(self) -> str:
+        return f"{self.recommended_value:g} p/kWh"
 
 
 class BatterySolarOptimiserManualHouseLoadNumber(BatterySolarOptimiserBaseNumber):

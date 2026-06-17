@@ -674,6 +674,7 @@ class BatterySolarOptimiserCoordinator:
 
             discharge_aggressiveness = self.get_control_value("discharge_aggressiveness", 60.0)
             charge_rate_kw = self.get_control_value("charge_rate_kw", float(cfg.get("max_charge_kw", 3.7)))
+            min_arbitrage_spread_pence = self.get_control_value("min_arbitrage_spread_pence", 3.0)
             effective_load_w = await self._effective_load_w(cfg, refresh_started)
             low_soc = current_soc_kwh < effective_min_soc_kwh
             first_slot = _align_to_half_hour(refresh_started)
@@ -697,6 +698,7 @@ class BatterySolarOptimiserCoordinator:
                 lookback_hours=int(float(cfg.get("lookback_hours", 12))),
                 slot_overrides=slot_overrides,
                 discharge_aggressiveness=discharge_aggressiveness,
+                min_arbitrage_spread_pence=min_arbitrage_spread_pence,
             )
 
             source_counts = {"actual": 0, "previous_day": 0, "fallback": 0}
@@ -709,6 +711,7 @@ class BatterySolarOptimiserCoordinator:
             self.data["effective_min_soc_kwh"] = effective_min_soc_kwh
             self.data["discharge_aggressiveness"] = discharge_aggressiveness
             self.data["charge_rate_kw"] = charge_rate_kw
+            self.data["min_arbitrage_spread_pence"] = min_arbitrage_spread_pence
 
             refresh_finished = dt_util.utcnow()
             self.data["last_updated"] = refresh_finished
@@ -824,6 +827,7 @@ class BatterySolarOptimiserPlanSensor(BatterySolarOptimiserBaseSensor):
             "minimum_reserve_kwh": round(float(self.coordinator.data.get("effective_min_soc_kwh", 0.0)), 3),
             "discharge_aggressiveness": self.coordinator.data.get("discharge_aggressiveness"),
             "charge_rate_kw": self.coordinator.data.get("charge_rate_kw"),
+            "min_arbitrage_spread_pence": self.coordinator.data.get("min_arbitrage_spread_pence"),
             "effective_house_load_w": round(float(self.coordinator.data.get("effective_house_load_w", 0.0)), 1),
             "average_house_load_w": round(float(self.coordinator.data.get("average_house_load_w") or 0.0), 1),
             "manual_house_load_w": round(float(self.coordinator.data.get("manual_house_load_w", 0.0)), 1),

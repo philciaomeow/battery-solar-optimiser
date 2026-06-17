@@ -175,6 +175,55 @@ def test_precharge_uses_cheapest_slots_before_discharge_deadline():
     assert any(slot.action == "discharge" for slot in plan.slots[29:35])
 
 
+def test_mid_price_arbitrage_discharges_when_future_recharge_is_cheaper():
+    now = datetime(2026, 6, 14, 7, 0, tzinfo=timezone.utc)
+    pence = [18.0, 19.0, 18.0, 17.0, 16.0, 15.0, 15.5, 16.0, 30.0, 31.0]
+    rates = [(now + timedelta(minutes=30 * i), p / 100.0) for i, p in enumerate(pence)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=1.0,
+        current_soc_kwh=4.0,
+        load_w=600,
+        max_charge_kw=1.5,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        discharge_aggressiveness=60,
+        min_arbitrage_spread_pence=3.0,
+    )
+
+    assert plan.slots[1].action == "discharge"  # 19p can be refilled around 15p.
+    assert any(plan.slots[i].action == "charge" for i in range(5, 8))
+
+
+def test_mid_price_arbitrage_respects_spread_setting():
+    now = datetime(2026, 6, 14, 7, 0, tzinfo=timezone.utc)
+    pence = [18.0, 19.0, 18.0, 17.0, 16.0, 15.0, 15.5, 16.0, 30.0, 31.0]
+    rates = [(now + timedelta(minutes=30 * i), p / 100.0) for i, p in enumerate(pence)]
+    solar = [(now + timedelta(minutes=30 * i), 0.0) for i in range(48)]
+
+    plan = build_plan(
+        now=now,
+        agile_rates=rates,
+        solar_forecast=solar,
+        battery_capacity_kwh=5.0,
+        min_soc_kwh=1.0,
+        current_soc_kwh=4.0,
+        load_w=600,
+        max_charge_kw=1.5,
+        max_discharge_kw=3.7,
+        efficiency=0.95,
+        discharge_aggressiveness=60,
+        min_arbitrage_spread_pence=5.0,
+    )
+
+    assert plan.slots[1].action == "hold"
+
+
 def test_aligns_to_half_hour():
     now = datetime(2026, 6, 14, 9, 17, tzinfo=timezone.utc)
     rates = [(now + timedelta(minutes=30 * i), 0.15) for i in range(48)]

@@ -77,6 +77,7 @@ def build_plan(
     lookback_hours: int = 12,
     slot_overrides: dict[int, str] | None = None,
     discharge_aggressiveness: float = 50.0,
+    min_arbitrage_spread_pence: float = 3.0,
     display_timezone: str = "Europe/London",
 ) -> Plan:
     """Build a charge/discharge plan over the next horizon_slots half-hours.
@@ -165,6 +166,7 @@ def build_plan(
         cheap_threshold + (price_spread * 0.55),
     )
     aggressiveness = max(0.0, min(100.0, float(discharge_aggressiveness)))
+    min_arbitrage_spread = max(0.0, float(min_arbitrage_spread_pence))
     # 50 is the neutral default. Higher values lower the expensive threshold so
     # the optimiser spends more of the usable battery during moderately-high
     # Agile periods; lower values preserve more battery for only the worst slots.
@@ -187,9 +189,11 @@ def build_plan(
     for i, slot in enumerate(slots):
         net_load = load_per_slot - slot.solar_kwh
         future_prices = [slots[j].price for j in range(i + 1, min(i + 16, len(slots)))]
+        recent_prices = [slots[j].price for j in range(max(0, i - 16), i)]
         max_future_price = max(future_prices) if future_prices else slot.price
         min_future_price = min(future_prices) if future_prices else slot.price
         avg_future_price = sum(future_prices) / len(future_prices) if future_prices else slot.price
+        max_recent_price = max(recent_prices) if recent_prices else slot.price
 
         action = "hold"
         is_forced = False
@@ -204,6 +208,30 @@ def build_plan(
             # Recharge in genuinely cheap/negative slots, even if they happen
             # after the peak discharge period rather than before it.
             action = "charge"
+            is_forced = True
+        elif (
+            arbitrage_enabled
+            and min_arbitrage_spread > 0
+            and slot.price <= max_recent_price - min_arbitrage_spread
+            and slot.price <= min_future_price + 0.5
+            and slot.price < expensive_threshold
+        ):
+            # Mid-price arbitrage recovery: if we recently avoided buying at a
+            # materially higher price, refill on this cheaper slot even if it is
+            # not in the absolute cheapest percentile. The simulation turns this
+            # back into hold if the battery is already full.
+            action = "charge"
+            is_forced = True
+        elif (
+            arbitrage_enabled
+            and min_arbitrage_spread > 0
+            and min_future_price <= slot.price - min_arbitrage_spread
+            and slot.price >= max(0.0, min_arbitrage_spread)
+        ):
+            # Mid-price arbitrage: discharge at a moderately expensive price if
+            # a cheaper recharge slot is visible soon. This catches cases like
+            # 19p now vs 15p later without needing to classify 19p as a peak.
+            action = "discharge"
             is_forced = True
         elif arbitrage_enabled and future_expensive and current_is_discounted and slot.price < expensive_threshold:
             # Charge/prepare before later expensive slots if the spread beats
@@ -270,7 +298,11 @@ def build_plan(
         slots before the deadline, breaking near-ties toward later slots.
         """
         try:
-            deadline = next(idx for idx, action in enumerate(planned) if action == "discharge")
+            deadline = next(
+                idx
+                for idx, action in enumerate(planned)
+                if action == "discharge" and slots[idx].price >= expensive_threshold
+            )
         except StopIteration:
             return planned
         if deadline <= 0:

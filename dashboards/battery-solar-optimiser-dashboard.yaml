@@ -216,6 +216,8 @@ views:
           name: Discharge aggressiveness — recommended 60%
         - entity: number.battery_solar_optimiser_battery_charge_rate
           name: Battery charge rate
+        - entity: number.battery_solar_optimiser_minimum_arbitrage_spread
+          name: Minimum charge/discharge spread — recommended 3p
         - type: section
           label: House load averaging
         - entity: switch.battery_solar_optimiser_use_average_house_load
