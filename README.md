@@ -177,16 +177,17 @@ dashboards/battery-solar-optimiser-dashboard.yaml
 
 It has two views:
 
-- **Plan** — projected battery graph, forecast graph, previous-24-hours actuals, and a read-only 24-hour plan table. Forced slots are highlighted, but this page intentionally has no override dropdowns so it stays calm while graphs update.
-- **Settings** — the same 24-hour plan table with per-slot override dropdowns, live tuning controls, source-entity reference rows, and totals.
+- **Plan** — projected battery graph, forecast graph, previous-24-hours actuals, and a read-only 24-hour plan table. Forced slots are highlighted with an Off/Charge/Discharge override-status column, but this page intentionally has no override controls so it stays calm while graphs update.
+- **Settings** — the same 24-hour plan table with per-slot Charge and Discharge override buttons, live tuning controls, source-entity reference rows, and totals.
 
-The dashboard uses one local custom-card resource from this repository:
+The dashboard uses two local custom-card resources from this repository:
 
 ```text
 www/bso-plan-card.js
+www/bso-layout-card.js
 ```
 
-The dashboard itself uses native Lovelace/masonry layout for maximum browser compatibility. `bso-plan-card.js` renders the 24-hour plan table.
+`bso-layout-card.js` holds each view to two responsive columns on wider screens and stacks them on phones. `bso-plan-card.js` renders the 24-hour plan table.
 
 ### Dashboard installation
 
@@ -196,10 +197,11 @@ The dashboard itself uses native Lovelace/masonry layout for maximum browser com
    /config/dashboards/battery-solar-optimiser-dashboard.yaml
    ```
 
-2. Copy the custom card JavaScript file into Home Assistant's `www` folder:
+2. Copy the custom card JavaScript files into Home Assistant's `www` folder:
 
    ```text
    /config/www/bso-plan-card.js
+   /config/www/bso-layout-card.js
    ```
 
 3. Register the custom card resource in `configuration.yaml`.
@@ -210,6 +212,8 @@ The dashboard itself uses native Lovelace/masonry layout for maximum browser com
    lovelace:
      resource_mode: yaml
      resources:
+       - url: /local/bso-layout-card.js
+         type: module
        - url: /local/bso-plan-card.js
          type: module
      dashboards:

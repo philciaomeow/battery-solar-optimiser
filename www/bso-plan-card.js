@@ -79,6 +79,12 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
     return '';
   }
 
+  _overrideLabel(value) {
+    if (value === 'Force charge') return 'Charge';
+    if (value === 'Force discharge') return 'Discharge';
+    return 'Off';
+  }
+
   _slotOverrideState(index, slot) {
     if (Object.prototype.hasOwnProperty.call(this._pendingOverrides || {}, index)) {
       return this._pendingOverrides[index];
@@ -118,18 +124,28 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
     const rows = slots.map((slot, index) => {
       const override = this._slotOverrideState(index, slot);
       const rowClass = `${slot.is_current ? 'current' : ''} ${this._overrideClass(override)}`.trim();
-      const selected = (option) => override === option ? 'selected' : '';
       const escapedTime = this._escapeHtml(slot.start_local ?? '');
       const escapedAction = this._escapeHtml(slot.action ?? 'unknown');
-      const escapedOverride = this._escapeHtml(override);
+      const escapedOverride = this._escapeHtml(this._overrideLabel(override));
+      const chargeActive = override === 'Force charge';
+      const dischargeActive = override === 'Force discharge';
       const overrideCell = this.config.show_overrides ? `
           <td class="override-cell">
-            <select data-slot="${index}" aria-label="Override slot ${index}">
-              <option value="No change" ${selected('No change')}>No change</option>
-              <option value="Force charge" ${selected('Force charge')}>Force charge</option>
-              <option value="Force discharge" ${selected('Force discharge')}>Force discharge</option>
-            </select>
-          </td>` : `<td class="override-badge">${override === 'No change' ? '' : `<span class="badge ${this._overrideClass(override)}">${escapedOverride}</span>`}</td>`;
+            <div class="override-buttons" role="group" aria-label="Override slot ${index}">
+              <button
+                class="override-button charge ${chargeActive ? 'active' : ''}"
+                data-slot="${index}"
+                data-value="Force charge"
+                aria-pressed="${chargeActive ? 'true' : 'false'}"
+              >Charge</button>
+              <button
+                class="override-button discharge ${dischargeActive ? 'active' : ''}"
+                data-slot="${index}"
+                data-value="Force discharge"
+                aria-pressed="${dischargeActive ? 'true' : 'false'}"
+              >Discharge</button>
+            </div>
+          </td>` : `<td class="override-badge"><span class="badge ${this._overrideClass(override) || 'override-off'}">${escapedOverride}</span></td>`;
       return `
         <tr class="${rowClass}">
           <td class="time"><strong>${escapedTime}</strong></td>
@@ -161,18 +177,22 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
           .badge.hold { background: #374151; color: #d1d5db; }
           .badge.forced-charge { background: #065f46; color: #6ee7b7; }
           .badge.forced-discharge { background: #991b1b; color: #fecaca; }
-          select {
-            max-width: 132px;
-            min-width: 116px;
-            padding: 4px 22px 4px 8px;
-            border-radius: 6px;
+          .override-buttons { display: inline-flex; gap: 6px; align-items: center; }
+          .override-button {
+            appearance: none;
             border: 1px solid var(--divider-color);
+            border-radius: 999px;
             background: var(--secondary-background-color);
             color: var(--primary-text-color);
             font: inherit;
+            font-weight: 700;
+            padding: 5px 10px;
+            cursor: pointer;
           }
-          tr.forced-charge select { border-color: #10b981; }
-          tr.forced-discharge select { border-color: #ef4444; }
+          .override-button.charge.active { background: #065f46; border-color: #10b981; color: #6ee7b7; }
+          .override-button.discharge.active { background: #991b1b; border-color: #ef4444; color: #fecaca; }
+          .override-button:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+          .badge.override-off { background: #374151; color: #d1d5db; }
           .override-badge { text-align: left; }
           .empty { padding: 16px; color: var(--secondary-text-color); }
         </style>
@@ -198,20 +218,13 @@ class BatterySolarOptimiserPlanCard extends HTMLElement {
     `;
 
     if (this.config.show_overrides) {
-      this.shadowRoot.querySelectorAll('select[data-slot]').forEach((select) => {
-        select.addEventListener('focus', () => { this._markSelectInteraction(); });
-        select.addEventListener('mousedown', () => { this._markSelectInteraction(); });
-        select.addEventListener('touchstart', () => { this._markSelectInteraction(); }, { passive: true });
-        select.addEventListener('blur', () => {
-          // Mobile native pickers can blur while the picker is still opening, so
-          // do not render here. Let the suppression timer expire naturally.
-          this._selectOpen = false;
-          this._scheduleRenderAfterSuppression();
-        });
-        select.addEventListener('change', (event) => {
-          this._markSelectInteraction(3000, false);
-          this._changeOverride(Number(event.target.dataset.slot), event.target.value);
-          this._scheduleRenderAfterSuppression();
+      this.shadowRoot.querySelectorAll('button[data-slot]').forEach((button) => {
+        button.addEventListener('click', (event) => {
+          const slot = Number(event.currentTarget.dataset.slot);
+          const requested = event.currentTarget.dataset.value;
+          const current = this._slotOverrideState(slot, slots[slot]);
+          const next = current === requested ? 'No change' : requested;
+          this._changeOverride(slot, next);
         });
       });
     }

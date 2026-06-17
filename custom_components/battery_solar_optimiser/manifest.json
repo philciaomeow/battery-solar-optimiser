@@ -1,12 +1,14 @@
 {
   "domain": "battery_solar_optimiser",
   "name": "Battery Solar Optimiser",
-  "codeowners": ["@philciaomeow"],
+  "codeowners": [
+    "@philciaomeow"
+  ],
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/philciaomeow/battery-solar-optimiser",
   "iot_class": "local_polling",
   "homeassistant": "2024.4.0",
   "requirements": [],
-  "version": "0.3.6"
+  "version": "0.3.7"
 }
