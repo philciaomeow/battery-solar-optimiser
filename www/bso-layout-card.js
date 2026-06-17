@@ -29,6 +29,7 @@ class BatterySolarOptimiserLayoutCard extends HTMLElement {
 
     const main = document.createElement('div');
     main.className = 'two-column-grid';
+    if (this.config.column_widths) main.style.setProperty('--bso-column-widths', this.config.column_widths);
     for (const [index, cfg] of this.config.columns.entries()) {
       main.appendChild(await make(cfg, `column column-${index + 1}`));
     }
@@ -36,13 +37,14 @@ class BatterySolarOptimiserLayoutCard extends HTMLElement {
 
     this.shadowRoot.innerHTML = `
       <style>
-        :host { display: block; }
-        .bso-dashboard-layout { display: flex; flex-direction: column; gap: 12px; }
+        :host { display: block; width: 100%; }
+        .bso-dashboard-layout { display: flex; flex-direction: column; gap: 12px; width: 100%; }
         .two-column-grid {
           display: grid;
-          grid-template-columns: minmax(360px, 1fr) minmax(360px, 1fr);
+          grid-template-columns: var(--bso-column-widths, minmax(0, 1fr) minmax(0, 1fr));
           gap: 12px;
           align-items: start;
+          width: 100%;
         }
         .header, .column { min-width: 0; }
         @media (max-width: 980px) {

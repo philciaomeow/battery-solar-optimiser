@@ -177,7 +177,7 @@ dashboards/battery-solar-optimiser-dashboard.yaml
 
 It has two views:
 
-- **Plan** — projected battery graph, forecast graph, previous-24-hours actuals, and a read-only 24-hour plan table. Forced slots are highlighted with an Off/Charge/Discharge override-status column, but this page intentionally has no override controls so it stays calm while graphs update.
+- **Plan** — a full-width two-column view with the read-only 24-hour plan table on the left and all graphs on the right. Forced slots are highlighted with an Off/Charge/Discharge override-status column, but this page intentionally has no override controls so it stays calm while graphs update.
 - **Settings** — the same 24-hour plan table with per-slot Charge and Discharge override buttons, live tuning controls, source-entity reference rows, and totals.
 
 The dashboard uses two local custom-card resources from this repository:
@@ -187,7 +187,7 @@ www/bso-plan-card.js
 www/bso-layout-card.js
 ```
 
-`bso-layout-card.js` holds each view to two responsive columns on wider screens and stacks them on phones. `bso-plan-card.js` renders the 24-hour plan table.
+`bso-layout-card.js` holds each view to two responsive full-width columns on wider screens and stacks them on phones. `bso-plan-card.js` renders the 24-hour plan table.
 
 ### Dashboard installation
 

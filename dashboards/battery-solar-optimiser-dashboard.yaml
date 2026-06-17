@@ -12,7 +12,14 @@ views:
 
 
         Times are shown using the integration display timezone. Unknown Agile slots use the configured fallback price.'
+    column_widths: minmax(720px, 1.45fr) minmax(360px, 0.75fr)
     columns:
+    - type: vertical-stack
+      cards:
+      - type: custom:bso-plan-card
+        title: 24 hour slot plan
+        entity: sensor.battery_solar_optimiser_plan
+        show_overrides: false
     - type: vertical-stack
       cards:
       - type: custom:apexcharts-card
@@ -42,12 +49,6 @@ views:
             return slots.map((slot) => [new Date(slot.start).getTime(), Number(slot.battery_percent || 0)]);
 
             '
-      - type: custom:bso-plan-card
-        title: 24 hour slot plan
-        entity: sensor.battery_solar_optimiser_plan
-        show_overrides: false
-    - type: vertical-stack
-      cards:
       - type: custom:apexcharts-card
         graph_span: 24h
         span:
@@ -186,6 +187,7 @@ views:
           group_by:
             duration: 10min
             func: last
+  panel: true
 - title: Settings
   path: bso-settings
   icon: mdi:cog
@@ -279,3 +281,4 @@ views:
           **Total export:** {{ state_attr(p, ''total_export_kwh'') }} kWh
 
           **Estimated daily cost:** {{ states(''sensor.battery_solar_optimiser_estimated_cost'') }} GBP'
+  panel: true
